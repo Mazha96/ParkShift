@@ -1,0 +1,10 @@
+{
+  "name": "ParkShift.Tests",
+  "rootNamespace": "ParkShift.Tests",
+  "references": ["ParkShift.Core", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+  "includePlatforms": ["Editor"],
+  "precompiledReferences": ["nunit.framework.dll"],
+  "defineConstraints": ["UNITY_INCLUDE_TESTS"],
+  "overrideReferences": true,
+  "autoReferenced": false
+}

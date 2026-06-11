@@ -1,0 +1,7 @@
+{
+  "name": "ParkShift.Core",
+  "rootNamespace": "ParkShift.Core",
+  "references": [],
+  "noEngineReferences": true,
+  "autoReferenced": true
+}

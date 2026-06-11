@@ -1,0 +1,21 @@
+{
+  "scopedRegistries": [
+    {
+      "name": "OpenUPM",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "com.firstgeargames"
+      ]
+    }
+  ],
+  "dependencies": {
+    "com.firstgeargames.fishnet": "4.5.3",
+    "com.unity.test-framework": "1.4.5",
+    "com.unity.ugui": "2.0.0",
+    "com.unity.modules.physics": "1.0.0",
+    "com.unity.modules.ui": "1.0.0",
+    "com.unity.modules.audio": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0"
+  }
+}
