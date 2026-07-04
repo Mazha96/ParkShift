@@ -7,8 +7,11 @@ using UnityEditor;
 namespace ParkShift.Vehicles
 {
     /// <summary>
-    /// Closed Catmull-Rom spline through the ordered waypoint loop, with an arc-length
-    /// lookup table so trains move at uniform spatial speed within a block.
+    /// Closed centripetal Catmull-Rom spline through the ordered waypoint loop, with an
+    /// arc-length lookup table so trains move at uniform spatial speed within a block.
+    /// Centripetal (Alpha = 0.5) parameterization weights each segment by chord length, so
+    /// uneven waypoint spacing (short station straights meeting long turn chords) can no
+    /// longer overshoot into S-bends the way uniform Catmull-Rom did.
     /// Blocks remain equal contiguous slices of the waypoint list (boundaries sit on waypoints),
     /// so the sim's (blockIndex, progress01) contract is unchanged.
     /// Also computes banking (roll) from horizontal turn rate for the visuals/mesh builder.
@@ -20,6 +23,10 @@ namespace ParkShift.Vehicles
 
         [Header("Spline")]
         [Range(2, 32)] public int SamplesPerSegment = 12;
+        [Tooltip("Catmull-Rom parameterization exponent: 0 = uniform (legacy — overshoots and " +
+                 "snakes on uneven waypoint spacing), 0.5 = centripetal (no cusps or " +
+                 "self-intersections), 1 = chordal.")]
+        [Range(0f, 1f)] public float Alpha = 0.5f;
 
         [Header("Banking")]
         public float MaxBankDegrees = 32f;
@@ -68,8 +75,18 @@ namespace ParkShift.Vehicles
                 Vector3 p1 = Waypoints[seg].position;
                 Vector3 p2 = Waypoints[(seg + 1) % n].position;
                 Vector3 p3 = Waypoints[(seg + 2) % n].position;
+                // Non-uniform knot spacing dt_i = |P_{i+1}-P_i|^Alpha: a short chord contributes
+                // a short parameter interval, so long neighbours no longer fling the curve
+                // sideways through it (the uniform-CR S-bend at the station exit).
+                float t0 = 0f;
+                float t1 = t0 + KnotInterval(p0, p1);
+                float t2 = t1 + KnotInterval(p1, p2);
+                float t3 = t2 + KnotInterval(p2, p3);
                 for (int s = 0; s < SamplesPerSegment; s++)
-                    _pts[seg * SamplesPerSegment + s] = CatmullRom(p0, p1, p2, p3, s / (float)SamplesPerSegment);
+                {
+                    float t = Mathf.Lerp(t1, t2, s / (float)SamplesPerSegment);
+                    _pts[seg * SamplesPerSegment + s] = CatmullRomNonUniform(p0, p1, p2, p3, t0, t1, t2, t3, t);
+                }
             }
 
             _cum = new float[dense + 1];
@@ -79,13 +96,27 @@ namespace ParkShift.Vehicles
             _built = _totalLen > 0.01f;
         }
 
-        static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+        /// <summary>Knot interval for one chord: |b - a| raised to Alpha, floored so degenerate
+        /// (zero-length) segments never produce a zero denominator in the pyramid below.</summary>
+        float KnotInterval(Vector3 a, Vector3 b)
         {
-            float t2 = t * t, t3 = t2 * t;
-            return 0.5f * ((2f * p1)
-                + (-p0 + p2) * t
-                + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2
-                + (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
+            return Mathf.Max(Mathf.Pow(Vector3.Distance(a, b), Alpha), 1e-3f);
+        }
+
+        /// <summary>Non-uniform Catmull-Rom via the Barry–Goldman pyramid: three linear
+        /// interpolations in knot space (A1..A3), then two (B1, B2), then one. Evaluates the
+        /// P1→P2 segment for t in [t1, t2]; with equal knot intervals it reduces exactly to the
+        /// classic uniform basis, and with centripetal knots (Alpha 0.5) it is guaranteed free
+        /// of cusps and self-intersections inside each segment.</summary>
+        static Vector3 CatmullRomNonUniform(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3,
+                                            float t0, float t1, float t2, float t3, float t)
+        {
+            Vector3 a1 = p0 * ((t1 - t) / (t1 - t0)) + p1 * ((t - t0) / (t1 - t0));
+            Vector3 a2 = p1 * ((t2 - t) / (t2 - t1)) + p2 * ((t - t1) / (t2 - t1));
+            Vector3 a3 = p2 * ((t3 - t) / (t3 - t2)) + p3 * ((t - t2) / (t3 - t2));
+            Vector3 b1 = a1 * ((t2 - t) / (t2 - t0)) + a2 * ((t - t0) / (t2 - t0));
+            Vector3 b2 = a2 * ((t3 - t) / (t3 - t1)) + a3 * ((t - t1) / (t3 - t1));
+            return b1 * ((t2 - t) / (t2 - t1)) + b2 * ((t - t1) / (t2 - t1));
         }
 
         /// <summary>Arc distance at a waypoint-index-space parameter u in [0, Waypoints.Count).</summary>

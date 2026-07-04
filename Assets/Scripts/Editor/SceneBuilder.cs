@@ -621,6 +621,81 @@ namespace ParkShift.EditorTools
             go.SetActive(false);   // hidden until the player looks at the prop
         }
 
+        /// <summary>Floor-standing OCC (operations control center) operator pedestal — the shared
+        /// family shape for the unload-side ride controls: base plinth with an emissive accent
+        /// trim strip, angled stem, and a wedge console head with a ~35°-raked face carrying an
+        /// accent face plate, a press cap and an emissive status dot. Dark hull material + one
+        /// per-function accent color keeps the family consistent while the function reads at a
+        /// glance. The PanelInteractable trigger volume hugs the console HEAD only, so
+        /// neighbouring pedestals never steal the player's aim. <paramref name="faceYaw"/> is the
+        /// world yaw the raked face looks toward; <paramref name="guarded"/> adds side rails and
+        /// a shroud hood for guarded controls (restraint release). <paramref name="pressCap"/>
+        /// returns the cap transform for a PropDrivers PressPulse (its local Z is the face
+        /// normal, so the press squashes into the console). Only the plinth keeps a solid
+        /// collider; every other part is visual or the head's trigger.</summary>
+        static GameObject BuildOpsPedestal(string name, Vector3 pos, float faceYaw,
+            Material hullMat, Material accentMat, PanelInteractable.Kind kind, string labelText,
+            bool guarded, Transform parent, out Transform pressCap)
+        {
+            var root = new GameObject(name);
+            root.transform.position = pos;
+            root.transform.rotation = Quaternion.Euler(0f, faceYaw, 0f);
+            if (parent != null) root.transform.SetParent(parent, true);
+            Quaternion q = root.transform.rotation;
+            System.Func<Vector3, Vector3> W = lp => pos + q * lp;   // pedestal-local -> world
+
+            // Base plinth (the pedestal's only solid, walk-blocking collider) + accent trim strip.
+            var plinth = Box($"{name}_Plinth", W(new Vector3(0f, 0.07f, 0f)), new Vector3(0.7f, 0.14f, 0.55f), hullMat, root.transform);
+            plinth.transform.rotation = q;
+            var trim = Box($"{name}_TrimStrip", W(new Vector3(0f, 0.155f, 0f)), new Vector3(0.72f, 0.03f, 0.57f), accentMat, root.transform);
+            trim.transform.rotation = q;
+            Object.DestroyImmediate(trim.GetComponent<Collider>());
+
+            // Angled stem leaning toward the operator.
+            var stem = Box($"{name}_Stem", W(new Vector3(0f, 0.55f, 0f)), new Vector3(0.3f, 0.8f, 0.24f), hullMat, root.transform);
+            stem.transform.rotation = q * Quaternion.Euler(12f, 0f, 0f);
+            Object.DestroyImmediate(stem.GetComponent<Collider>());
+
+            // Wedge console head, face raked 35° up from horizontal toward the operator.
+            Vector3 headC = new Vector3(0f, 1.02f, 0.08f);
+            Vector3 fn = new Vector3(0f, Mathf.Cos(35f * Mathf.Deg2Rad), Mathf.Sin(35f * Mathf.Deg2Rad)); // face normal (local)
+            var head = Box($"{name}_Head", W(headC), new Vector3(0.62f, 0.26f, 0.5f), hullMat, root.transform);
+            head.transform.rotation = q * Quaternion.Euler(35f, 0f, 0f);
+            Object.DestroyImmediate(head.GetComponent<Collider>());
+            var plate = Box($"{name}_FacePlate", W(headC + fn * 0.14f), new Vector3(0.5f, 0.02f, 0.36f), accentMat, root.transform);
+            plate.transform.rotation = q * Quaternion.Euler(35f, 0f, 0f);
+            Object.DestroyImmediate(plate.GetComponent<Collider>());
+            var cap = Box($"{name}_PressCap", W(headC + fn * 0.185f), new Vector3(0.18f, 0.18f, 0.06f), accentMat, root.transform);
+            cap.transform.rotation = q * Quaternion.Euler(-55f, 0f, 0f); // local Z = face normal — PressPulse squashes into the face
+            Object.DestroyImmediate(cap.GetComponent<Collider>());
+            pressCap = cap.transform;
+
+            // Emissive status dot on the head crown.
+            Ball($"{name}_StatusDot", W(headC + new Vector3(0f, 0.17f, -0.14f)), 0.08f, accentMat, root.transform);
+
+            if (guarded)
+            {
+                // Guarded look: side rails flanking the head + a shroud hood over the face's top edge.
+                foreach (float sx in new[] { -0.37f, 0.37f })
+                {
+                    var rail = Box($"{name}_Guard{(sx < 0 ? "L" : "R")}", W(headC + new Vector3(sx, 0.02f, 0f)),
+                                   new Vector3(0.05f, 0.34f, 0.56f), hullMat, root.transform);
+                    rail.transform.rotation = q * Quaternion.Euler(35f, 0f, 0f);
+                    Object.DestroyImmediate(rail.GetComponent<Collider>());
+                }
+                var hood = Box($"{name}_Shroud", W(headC + fn * 0.14f + new Vector3(0f, 0.15f, -0.21f)),
+                               new Vector3(0.66f, 0.04f, 0.2f), hullMat, root.transform);
+                hood.transform.rotation = q * Quaternion.Euler(35f, 0f, 0f);
+                Object.DestroyImmediate(hood.GetComponent<Collider>());
+            }
+
+            // Interaction trigger on the HEAD only (head-local axes, so the volume tilts with
+            // the rake and stays snug — no overlap with the neighbouring pedestals).
+            AddInteractor(head.transform, kind, new Vector3(0.75f, 0.55f, 0.6f), new Vector3(0f, 0.06f, 0.02f));
+            Label(root, labelText, 1.7f);
+            return root;
+        }
+
         [MenuItem("ParkShift/Build All Scenes")]
         public static void BuildAll()
         {
@@ -850,8 +925,15 @@ namespace ParkShift.EditorTools
                 new Vector3(-6f, 0.6f, 2.2f), new Vector3(-4.5f, 0.6f, 2.2f), new Vector3(-3f, 0.6f, 2.2f),
                 new Vector3(-1.5f, 0.6f, 2.2f), new Vector3(0f, 0.6f, 2.2f), new Vector3(1.5f, 0.6f, 2.2f),
                 new Vector3(3f, 0.6f, 2.2f), new Vector3(4.5f, 0.6f, 2.2f), new Vector3(6f, 0.6f, 2.2f),
-                // 9-16 BLOCK 2: pre-lift turn + chain lift (boundary at the crest)
-                new Vector3(11f, 0.9f, 4.5f), new Vector3(14.5f, 1.5f, 7.5f), new Vector3(17f, 2.1f, 11f),
+                // 9-16 BLOCK 2: pre-lift turn + chain lift (boundary at the crest).
+                // WP 9 is an easing point a hair north of the straight's extension, on the turn
+                // arc's tangent line: the exit tangent at WP 8 leaves at ~9° instead of the ~20°
+                // the old (11, 0.9, 4.5) start forced, so the straight flows into the arc nearly
+                // tangent-continuously. Measured on the centripetal spline this cuts the worst
+                // wrong-way (reverse-curvature) rate at the station exit from -76.7 deg/m
+                // (uniform CR + old WP 9 — the post-dispatch S-bend) to -7.1 deg/m, with <=2cm
+                // lateral deviation left on the station straight itself.
+                new Vector3(9f, 0.7f, 2.7f), new Vector3(14.5f, 1.5f, 7.5f), new Vector3(17f, 2.1f, 11f),
                 new Vector3(18.4f, 2.6f, 13.5f),   // lift base — catwalk + stairs start here
                 new Vector3(19f, 7f, 19.5f), new Vector3(19.4f, 12f, 25.5f),
                 new Vector3(19.7f, 16.8f, 31.5f), new Vector3(19.9f, 20.6f, 37f),
@@ -1451,29 +1533,36 @@ namespace ParkShift.EditorTools
             };
             gvm.UnloadExitPath = exitPath;
 
-            // ---- Unload control podium (left of Unload): Open / Close door + Release restraints ----
-            var unloadPodiumPrefab = Prop("Podium.fbx");
-            var upPos = new Vector3(-6.8f, 0.5f, 1.2f);
-            GameObject upRoot = unloadPodiumPrefab != null
-                ? PlaceProp(unloadPodiumPrefab, "UnloadControlPodium", upPos, 90f)
-                : Box("UnloadControlPodium", upPos + Vector3.up * 0.6f, new Vector3(0.6f, 1.2f, 0.6f), mDanger);
-            if (unloadPodiumPrefab != null) SwapMaterial(upRoot, "PS_Blue", mDanger);
-
-            System.Func<string, PanelInteractable.Kind, Vector3, string, GameObject> UnloadButton = (n, kind, worldPos, lbl) =>
-            {
-                var b = Box(n, worldPos, new Vector3(0.2f, 0.12f, 0.24f), mPanel, upRoot.transform);
-                var col = b.GetComponent<Collider>();
-                if (col) Object.DestroyImmediate(col);            // replace the primitive collider with a trigger interactor
-                AddInteractor(b.transform, kind, new Vector3(0.4f, 0.4f, 0.4f));
-                Label(b, lbl, 0.4f);
-                return b;
-            };
-            var openBtn  = UnloadButton("UnloadPodium_OpenDoorButton",        PanelInteractable.Kind.UnloadDoorOpen,    new Vector3(-7.05f, 1.4f, 1.15f), "OPEN DOOR");
-            var closeBtn = UnloadButton("UnloadPodium_CloseDoorButton",       PanelInteractable.Kind.UnloadDoorClose,   new Vector3(-6.8f,  1.4f, 1.15f), "CLOSE DOOR");
-            var relBtn   = UnloadButton("UnloadPodium_ReleaseRestraintsButton", PanelInteractable.Kind.ReleaseRestraints, new Vector3(-6.55f, 1.4f, 1.15f), "RELEASE RESTRAINTS");
-            var upd = upRoot.AddComponent<UnloadPodiumDriver>();
-            upd.OpenButton = openBtn.transform; upd.CloseButton = closeBtn.transform; upd.ReleaseButton = relBtn.transform;
-            Label(upRoot, "UNLOAD CONTROL", 1.6f);
+            // ---- Unload-side OCC (operations control center) consoles: three themed operator
+            // pedestals in a shallow arc off the platform's west edge, >=1.2m apart so each is
+            // individually aimable from the natural operator spot on the platform (~x -6). The
+            // old podium crammed all three buttons 0.25m apart — impossible to aim at one.
+            // Order follows the unload flow and keeps the exact same sim verbs (zero logic
+            // changes):
+            //   amber  DOOR OPEN         -> Kind.UnloadDoorOpen
+            //   red    RESTRAINT RELEASE -> Kind.ReleaseRestraints (guarded: rails + shroud)
+            //   green  UNLOAD CONFIRM    -> Kind.UnloadDoorClose (closing the unload door IS
+            //                               the release-to-load step, so it reads as confirm).
+            // Positions stay clear of the unload door (x -6.45..-4.55 at z 0.5), the guest exit
+            // markers (z 0.7) and the exit path (-5,0) -> (-7.5,-1.2) -> (-9.5,-2.6).
+            var mOccHull  = mSeat; // shared dark hull — no new near-black material needed
+            var mOccAmber = GlowMat("PS_OccAmber", new Color(0.35f, 0.22f, 0.05f), new Color(1f, 0.62f, 0.10f), 2.2f);
+            var mOccRed   = GlowMat("PS_OccRed",   new Color(0.30f, 0.06f, 0.06f), new Color(1f, 0.18f, 0.12f), 2.2f);
+            var mOccGreen = GlowMat("PS_OccGreen", new Color(0.05f, 0.28f, 0.10f), new Color(0.25f, 1f, 0.35f), 2.2f);
+            var occRoot = new GameObject("UnloadOpsConsoles");
+            Transform occOpenCap, occReleaseCap, occCloseCap;
+            BuildOpsPedestal("OccConsole_DoorOpen", new Vector3(-8.0f, 0f, 1.7f), 120f,
+                mOccHull, mOccAmber, PanelInteractable.Kind.UnloadDoorOpen, "OCC — DOOR OPEN",
+                false, occRoot.transform, out occOpenCap);
+            BuildOpsPedestal("OccConsole_RestraintRelease", new Vector3(-8.5f, 0f, 0.45f), 90f,
+                mOccHull, mOccRed, PanelInteractable.Kind.ReleaseRestraints, "OCC — RESTRAINT RELEASE",
+                true, occRoot.transform, out occReleaseCap);
+            BuildOpsPedestal("OccConsole_UnloadConfirm", new Vector3(-7.9f, 0f, -0.6f), 60f,
+                mOccHull, mOccGreen, PanelInteractable.Kind.UnloadDoorClose, "OCC — UNLOAD CONFIRM",
+                false, occRoot.transform, out occCloseCap);
+            // Same driver + press feedback as before — only the button transforms moved.
+            var upd = occRoot.AddComponent<UnloadPodiumDriver>();
+            upd.OpenButton = occOpenCap; upd.CloseButton = occCloseCap; upd.ReleaseButton = occReleaseCap;
 
             // ================= PARK DRESSING (pure decor — no gameplay wiring) =================
             var parkRoot = new GameObject("ParkDressing");

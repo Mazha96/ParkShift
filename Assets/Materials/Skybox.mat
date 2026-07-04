@@ -8,12 +8,12 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Skybox
-  m_Shader: {fileID: 106, guid: 0000000000000000f000000000000000, type: 0}
+  m_Shader: {fileID: 4800000, guid: 18953e80d2c2eee43a0234567cdeba07, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
+  m_ValidKeywords: []
+  m_InvalidKeywords:
   - _SUNDISK_HIGH_QUALITY
-  m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -28,11 +28,27 @@ Material:
     m_Floats:
     - _AtmosphereThickness: 0.95
     - _Exposure: 1.25
+    - _HorizonFalloff: 2.2
+    - _HorizonHeight: 0
+    - _PlanetCos: 0.9915
+    - _RingInner: 1.4
+    - _RingIntensity: 0.9
+    - _RingOuter: 2.3
+    - _StarBrightness: 2.6
+    - _StarDensity: 0.85
     - _SunDisk: 2
     - _SunSize: 0.045
     - _SunSizeConvergence: 5
     m_Colors:
+    - _BottomColor: {r: 0.012, g: 0.01, b: 0.028, a: 1}
     - _GroundColor: {r: 0.36, g: 0.35, b: 0.39, a: 1}
+    - _HaloColor: {r: 0.35, g: 0.55, b: 0.95, a: 1}
+    - _HorizonColor: {r: 0.1, g: 0.1, b: 0.28, a: 1}
+    - _PlanetColor: {r: 0.62, g: 0.7, b: 0.86, a: 1}
+    - _PlanetDir: {r: -0.5, g: 0.13, b: 0.85, a: 0}
+    - _RingColor: {r: 0.82, g: 0.76, b: 0.66, a: 1}
+    - _RingTilt: {r: 0.3, g: 0.9, b: 0.25, a: 0}
     - _SkyTint: {r: 0.52, g: 0.68, b: 0.95, a: 1}
+    - _TopColor: {r: 0.006, g: 0.007, b: 0.018, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1
