@@ -60,17 +60,14 @@
       "source": "builtin",
       "dependencies": {}
     },
-    "com.unity.modules.physics": {
+    "com.unity.modules.particlesystem": {
       "version": "1.0.0",
       "depth": 0,
       "source": "builtin",
       "dependencies": {}
     },
-    "com.unity.modules.ui": {
+    "com.unity.modules.physics": {
       "version": "1.0.0",
       "depth": 0,
       "source": "builtin",
       "dependencies": {}
-    }
-  }
-}

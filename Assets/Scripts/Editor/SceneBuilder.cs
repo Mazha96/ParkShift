@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using ParkShift.Attraction;
 using ParkShift.Guests;
+using ParkShift.Interaction;
 using ParkShift.Vehicles;
 using PSEnv = ParkShift.Environment;
 
@@ -131,7 +132,7 @@ namespace ParkShift.EditorTools
         /// front of an interactable can never shove the player. Pass <paramref name="center"/> to
         /// place the volume on the visible part when the mesh origin sits elsewhere (e.g. levers
         /// whose pivot is at the floor).</summary>
-        static void AddInteractor(Transform part, PanelInteractable.Kind kind, Vector3 colliderSize, Vector3 center = default)
+        static void AddInteractor(Transform part, PanelInteractable.Kind kind, Vector3 colliderSize, Vector3 center = default, bool glow = true)
         {
             if (part == null) return;
             var bc = part.gameObject.AddComponent<BoxCollider>();
@@ -139,6 +140,10 @@ namespace ParkShift.EditorTools
             bc.center = center;
             bc.isTrigger = true;
             part.gameObject.AddComponent<PanelInteractable>().PanelKind = kind;
+            // Interactable affordance: subtle idle emission breathing + gaze highlight
+            // (skipped for props that drive their own light, e.g. the dispatch push button).
+            if (glow && part.GetComponent<InteractableGlow>() == null)
+                part.gameObject.AddComponent<InteractableGlow>();
         }
 
         /// <summary>Configures the Dewey FBX (looping Walk/Idle/Sit clips) and returns the prefab.</summary>
@@ -345,14 +350,42 @@ namespace ParkShift.EditorTools
             return sun;
         }
 
+        /// <summary>World-space nameplate, look-to-reveal: hidden by default and faded in by the
+        /// player's LabelLookSystem while the camera rests on the prop (the LookLabel on the prop
+        /// root owns the fade + billboard; any child collider hit resolves to it). Props with no
+        /// collider at all (pure indicators) get a snug trigger box fitted to their renderers so
+        /// the look-ray has something to hit — fitted BEFORE the text mesh exists so the fit never
+        /// includes the label's own bounds.</summary>
         static void Label(GameObject target, string text, float yOffset = 0.8f)
         {
+            if (target.GetComponentInChildren<Collider>() == null)
+            {
+                var rends = target.GetComponentsInChildren<Renderer>();
+                if (rends.Length > 0)
+                {
+                    var b = rends[0].bounds;
+                    for (int i = 1; i < rends.Length; i++) b.Encapsulate(rends[i].bounds);
+                    var fit = target.AddComponent<BoxCollider>();
+                    fit.isTrigger = true;   // label proxy only — never shoves the player
+                    fit.center = target.transform.InverseTransformPoint(b.center);
+                    var ls = target.transform.lossyScale;
+                    fit.size = new Vector3(b.size.x / Mathf.Max(ls.x, 1e-4f),
+                                           b.size.y / Mathf.Max(ls.y, 1e-4f),
+                                           b.size.z / Mathf.Max(ls.z, 1e-4f));
+                }
+            }
+
             var go = new GameObject(target.name + "_Label");
             go.transform.SetParent(target.transform, false);
             go.transform.localPosition = Vector3.up * yOffset;
             var tm = go.AddComponent<TextMesh>();
             tm.text = text; tm.characterSize = 0.12f; tm.fontSize = 48;
             tm.anchor = TextAnchor.MiddleCenter; tm.color = Color.white;
+
+            var look = target.GetComponent<LookLabel>();
+            if (look == null) look = target.AddComponent<LookLabel>();
+            look.Text = tm;
+            go.SetActive(false);   // hidden until the player looks at the prop
         }
 
         [MenuItem("ParkShift/Build All Scenes")]
@@ -708,16 +741,20 @@ namespace ParkShift.EditorTools
             {
                 var p = Box(name, pos, new Vector3(0.9f, 1.1f, 0.5f), m);
                 p.AddComponent<PanelInteractable>().PanelKind = kind;
+                p.AddComponent<InteractableGlow>();   // reads as interactable at a glance
                 Label(p, label, 1.0f);
             };
             // Open-shift lever (green Blender prop; box fallback). Throws to "on" when the shift opens.
             var shiftLeverPrefab = Prop("OpenShiftLever.fbx");
             if (shiftLeverPrefab != null)
             {
-                // The lever's mount PLATE normal runs along the model's X. The booth back wall (z=-5.4)
-                // faces along Z, so the lever must yaw 270° to lay the flush plate INTO the wall while the
-                // handle faces +Z toward the player. (At 0 the plate faced sideways = not flush.)
-                var sl = PlaceProp(shiftLeverPrefab, "OpenShiftLever", new Vector3(8.5f, 0.5f, -5.05f), 270f);
+                // The lever's mount PLATE normal runs along the model's X. Yaw 90° squares the plate
+                // to the booth back wall (z=-5.4) with the HANDLE facing +Z toward the operator inside
+                // the booth (the old yaw 270 left the handle facing the wall). The assembly is pulled
+                // ~0.25m off the wall so the plate and the throw arc never clip the boards. The
+                // ShiftLeverDriver pitch is authored about the pivot's LOCAL X, so the swing stays
+                // model-relative — no sign flip needed after the 180° turn.
+                var sl = PlaceProp(shiftLeverPrefab, "OpenShiftLever", new Vector3(8.5f, 0.5f, -4.8f), 90f);
                 var pivot = FindDeep(sl.transform, "OpenShiftLever_Pivot");
                 // Interaction volume on the lever wrapper, raised to cover the handle (~1.1-2.2m up).
                 // Trigger-only: lets the player look-to-interact without the collider ever pushing them.
@@ -728,7 +765,8 @@ namespace ParkShift.EditorTools
             }
             else
             {
-                Panel("ShiftStartPanel", PanelInteractable.Kind.ShiftStart, new Vector3(8.5f, 0.7f, -5.15f), mPanel, "SHIFT START");
+                // Pulled off the back wall (front face z=-5.3) like the FBX lever, so the box never clips.
+                Panel("ShiftStartPanel", PanelInteractable.Kind.ShiftStart, new Vector3(8.5f, 0.7f, -5.0f), mPanel, "SHIFT START");
             }
             var consolePrefab = Prop("Console.fbx");
             if (consolePrefab != null)
@@ -752,6 +790,26 @@ namespace ParkShift.EditorTools
                 Panel("DispatchPanel", PanelInteractable.Kind.DispatchButton, new Vector3(10.8f, 0.7f, -3.4f), mDanger, "DISPATCH");
             }
             Panel("AssistantPhone", PanelInteractable.Kind.AssistantPhone, new Vector3(12.2f, 0.7f, -3.4f), mPanel, "TECH PHONE (H)");
+
+            // ---- Dispatch push button: chunky arcade mushroom on its own stand beside the console —
+            // THE primary dispatch affordance (the console control keeps working; both funnel through
+            // the same PanelInteractable -> OpVerb.Dispatch). DispatchButtonLight (PropDrivers) polls
+            // Sim.CanDispatch read-only: bright green invite pulse when dispatch is legal, dim when
+            // blocked, one flash + a cap press when the train actually leaves. ----
+            var mDispatchGo = GlowMat("PS_DispatchGo", new Color(0.06f, 0.22f, 0.10f), new Color(0.25f, 1f, 0.35f), 2.2f);
+            var dpbRoot = new GameObject("DispatchPushButton");
+            dpbRoot.transform.position = new Vector3(11.2f, 0f, -3.0f);
+            var dpbStand = Cyl("Stand", new Vector3(11.2f, 0.5f, -3.0f), new Vector3(0.18f, 0.5f, 0.18f), mBooth, dpbRoot.transform);
+            Object.DestroyImmediate(dpbStand.GetComponent<Collider>());   // trigger interactor covers the whole button
+            var dpbBezel = Cyl("Bezel", new Vector3(11.2f, 1.03f, -3.0f), new Vector3(0.4f, 0.05f, 0.4f), mSeat, dpbRoot.transform);
+            Object.DestroyImmediate(dpbBezel.GetComponent<Collider>());
+            var dpbCap = Ball("Cap", new Vector3(11.2f, 1.1f, -3.0f), 1f, mDispatchGo, dpbRoot.transform);
+            dpbCap.transform.localScale = new Vector3(0.30f, 0.17f, 0.30f);   // squashed dome = mushroom cap
+            // No InteractableGlow here — the button drives its own cap light (two emission writers would fight).
+            AddInteractor(dpbRoot.transform, PanelInteractable.Kind.DispatchButton,
+                new Vector3(0.55f, 0.6f, 0.55f), new Vector3(0f, 0.95f, 0f), glow: false);
+            dpbRoot.AddComponent<DispatchButtonLight>().Cap = dpbCap.transform;
+            Label(dpbRoot, "DISPATCH", 1.5f);
 
             // Zone-sensor reset button beside the dispatch console (BlockSensorGhost step 2:
             // refused until the operator has walked the course and verified the block on foot).
@@ -813,6 +871,7 @@ namespace ParkShift.EditorTools
                 Panel("MaintenancePanel", PanelInteractable.Kind.MaintenancePanel, new Vector3(-16, 0.7f, -6.2f), mPanel, "DRIVE RESET");
                 var loto = Box("LotoLever", new Vector3(-12, 0.8f, -6.2f), new Vector3(0.5f, 1.6f, 0.5f), mDanger);
                 loto.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.LotoLever;
+                loto.AddComponent<InteractableGlow>();
                 Label(loto, "LOCKOUT", 1.2f);
                 lotoTag = Box("LotoTag", loto.transform.position + new Vector3(0.5f, 0.2f, 0), new Vector3(0.25f, 0.35f, 0.05f), mGate);
             }
@@ -833,6 +892,7 @@ namespace ParkShift.EditorTools
             // ---- Dropped item prop (near station edge) ----
             var item = Box("DroppedItem", new Vector3(5.5f, 0.65f, 1.6f), new Vector3(0.35f, 0.35f, 0.35f), mGate);
             item.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.DroppedItem;
+            item.AddComponent<InteractableGlow>();
             Label(item, "GUEST ITEM", 0.5f);
 
             // ---- Technician incident props ----
@@ -859,6 +919,7 @@ namespace ParkShift.EditorTools
                 intruder.GetComponent<Renderer>().sharedMaterial = mDanger;
             }
             intruder.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.IntruderEscort;
+            intruder.AddComponent<InteractableGlow>();
             Label(intruder, "GUEST ON TRACK!", deweyPrefab != null ? 2.9f : 1.3f);
 
             // Collision contact-point marker on the brake run approach (red flag). Interactor = CollisionInspect.
@@ -885,6 +946,7 @@ namespace ParkShift.EditorTools
             {
                 var winch = Box("EvacWinch", new Vector3(0, 0.7f, 19.5f), new Vector3(0.9f, 1.1f, 0.6f), mPanel);
                 winch.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.WinchPanel;
+                winch.AddComponent<InteractableGlow>();
                 Label(winch, "EVAC WINCH", 1.0f);
             }
             // Stalled-train indicator out on the course (red flag; non-interactable, toggled by FaultPropController).

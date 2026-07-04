@@ -155,6 +155,20 @@ namespace ParkShift.Juice
             AddTone(buf, start, dur * 0.8f, freq * 3f, freq * 3f, Wave.Sine, gain * 0.14f, 0.008f, dur * 0.5f);
         }
 
+        /// <summary>Hard de-click guarantee for one-shots: linear fade-in over the first
+        /// <paramref name="attack"/> seconds and fade-out over the last <paramref name="release"/>
+        /// seconds of the whole buffer, so every clip starts and ends at exactly zero amplitude
+        /// no matter how its layers line up. Sized per sound (percussive hits keep a ~1 ms
+        /// attack for punch; chimes/fanfares get softer edges and longer tails). Never applied
+        /// to loop clips — their seams are made click-free by construction instead.</summary>
+        static void FadeEnds(float[] buf, float attack, float release)
+        {
+            int a = Mathf.Clamp((int)(attack * SampleRate), 1, buf.Length / 2);
+            int r = Mathf.Clamp((int)(release * SampleRate), 1, buf.Length / 2);
+            for (int i = 0; i < a; i++) buf[i] *= i / (float)a;
+            for (int i = 0; i < r; i++) buf[buf.Length - 1 - i] *= i / (float)r;
+        }
+
         static void Normalize(float[] buf, float peak)
         {
             float max = 0f;
@@ -181,6 +195,7 @@ namespace ParkShift.Juice
             AddTone(d, 0.06f, 0.09f, 1318.5f, 1318.5f, Wave.Sine, 0.5f, 0.003f, 0.06f);
             AddTone(d, 0.06f, 0.09f, 2637f, 2637f, Wave.Sine, 0.12f, 0.003f, 0.06f);
             Normalize(d, 0.7f);
+            FadeEnds(d, 0.003f, 0.03f);
             return Bake("ui_confirm", d);
         }
 
@@ -192,6 +207,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.22f, 150f, 118f, Wave.Square, 0.28f, 0.004f, 0.07f);
             AddTone(d, 0f, 0.22f, 154f, 122f, Wave.Square, 0.22f, 0.004f, 0.07f);
             Normalize(d, 0.55f);
+            FadeEnds(d, 0.004f, 0.025f);
             return Bake("ui_refuse", d);
         }
 
@@ -204,6 +220,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.06f, 210f, 160f, Wave.Triangle, 0.35f, 0.001f, 0.05f);
             AddNoise(d, 0f, 0.03f, 0.5f, 0.001f, 0.02f, 0.5f, 0.2f, 71);
             Normalize(d, 0.85f);
+            FadeEnds(d, 0.001f, 0.02f);
             return Bake("clunk", d);
         }
 
@@ -215,6 +232,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.08f, 150f, 120f, Wave.Sine, 0.5f, 0.001f, 0.06f);
             AddNoise(d, 0f, 0.02f, 0.4f, 0.001f, 0.015f, 0.6f, 0.3f, 72);
             Normalize(d, 0.6f);
+            FadeEnds(d, 0.001f, 0.02f);
             return Bake("clack", d);
         }
 
@@ -226,6 +244,7 @@ namespace ParkShift.Juice
             AddNoise(d, 0f, 0.012f, 0.6f, 0.0005f, 0.01f, 0.7f, 0.4f, 73);
             AddTone(d, 0.004f, 0.04f, 1500f, 1100f, Wave.Sine, 0.2f, 0.001f, 0.03f);
             Normalize(d, 0.5f);
+            FadeEnds(d, 0.001f, 0.012f);
             return Bake("click", d);
         }
 
@@ -238,6 +257,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.42f, 241f, 372f, Wave.Triangle, 0.12f, 0.05f, 0.12f);
             AddNoise(d, 0f, 0.42f, 0.2f, 0.05f, 0.12f, 0.12f, 0.18f, 74);
             Normalize(d, 0.5f);
+            FadeEnds(d, 0.006f, 0.03f);
             return Bake("servo", d);
         }
 
@@ -249,6 +269,7 @@ namespace ParkShift.Juice
             AddNoise(d, 0f, 0.9f, 1f, 0.28f, 0.4f, 0.02f, 0.5f, 75);
             AddTone(d, 0.05f, 0.7f, 60f, 190f, Wave.Sine, 0.25f, 0.2f, 0.3f);
             Normalize(d, 0.8f);
+            FadeEnds(d, 0.01f, 0.05f);
             return Bake("whoosh", d);
         }
 
@@ -260,6 +281,7 @@ namespace ParkShift.Juice
             AddNote(d, 0f, 0.7f, 1046.5f, 0.5f);
             AddNote(d, 0f, 0.7f, 1568f, 0.18f);
             Normalize(d, 0.65f);
+            FadeEnds(d, 0.006f, 0.06f);
             return Bake("chime", d);
         }
 
@@ -271,6 +293,7 @@ namespace ParkShift.Juice
             AddNote(d, 0f, 0.16f, 659.25f, 0.4f);
             AddNote(d, 0.13f, 0.42f, 880f, 0.5f);
             Normalize(d, 0.65f);
+            FadeEnds(d, 0.005f, 0.05f);
             return Bake("resolve_ding", d);
         }
 
@@ -283,6 +306,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.45f, 165f, 330f, Wave.Triangle, 0.2f, 0.03f, 0.18f);
             AddNote(d, 0.4f, 0.2f, 880f, 0.35f);
             Normalize(d, 0.6f);
+            FadeEnds(d, 0.006f, 0.05f);
             return Bake("power_up", d);
         }
 
@@ -294,6 +318,7 @@ namespace ParkShift.Juice
             AddTone(d, 0f, 0.13f, 58f, 42f, Wave.Sine, 0.9f, 0.001f, 0.1f);
             AddNoise(d, 0f, 0.05f, 0.25f, 0.001f, 0.04f, 0.08f, 0.05f, 76);
             Normalize(d, 0.8f);
+            FadeEnds(d, 0.001f, 0.02f);
             return Bake("thump", d);
         }
 
@@ -307,6 +332,7 @@ namespace ParkShift.Juice
                 AddTone(d, 0.02f * k, 0.32f, 260f + 34f * k, 680f + 70f * k,
                         Wave.Sine, 0.11f, 0.05f, 0.2f);
             Normalize(d, 0.7f);
+            FadeEnds(d, 0.008f, 0.06f);
             return Bake("cheer_pop", d);
         }
 
@@ -321,6 +347,7 @@ namespace ParkShift.Juice
             for (int i = 0; i < steps; i++)
                 AddNote(d, 0.082f * i, 0.14f, notes[i], 0.32f + 0.025f * i);
             Normalize(d, 0.68f);
+            FadeEnds(d, 0.005f, 0.05f);
             return Bake(key, d);
         }
 
@@ -358,6 +385,7 @@ namespace ParkShift.Juice
                 AddNote(d, 0.86f, 1.0f, 277.18f, 0.28f);
             }
             Normalize(d, 0.7f);
+            FadeEnds(d, 0.008f, 0.08f);
             return Bake(key, d);
         }
 

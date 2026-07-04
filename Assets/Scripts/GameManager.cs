@@ -33,6 +33,7 @@ namespace ParkShift
             rig.AddComponent<FirstPersonController>();
             var role = rig.AddComponent<RoleController>();
             var interactor = rig.AddComponent<PlayerInteractor>();
+            rig.AddComponent<LabelLookSystem>();   // look-to-reveal nameplates + interactable glow
 
             var hud = new GameObject("HUD").AddComponent<HUDController>();
             hud.Bind(interactor, role);

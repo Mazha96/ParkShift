@@ -24,6 +24,7 @@ namespace ParkShift.Juice
 
         Vehicles.TrainVisual _tv;
         AudioSource _rumble;
+        float _rumbleVol;   // pre-duck rumble level, tracked exponentially
         Vector3 _baseScale;
         bool _scaleInit;
         float _launchTimer = -1f;
@@ -108,8 +109,11 @@ namespace ParkShift.Juice
             float speedNorm = Mathf.Clamp01(t.Speed / Mathf.Max(0.01f, FullSpeed));
             if (_rumble != null)
             {
-                _rumble.volume = Mathf.MoveTowards(_rumble.volume,
-                    AudioDirector.Master * RumbleVolume * speedNorm, 2.5f * dt);
+                // Exponential tracking (τ ≈ 0.25s) instead of linear MoveTowards so speed
+                // changes glide; LoopDuck folds in the event ducker + master soft limiter.
+                float rumbleTarget = AudioDirector.Master * RumbleVolume * speedNorm;
+                _rumbleVol += (rumbleTarget - _rumbleVol) * (1f - Mathf.Exp(-dt / 0.25f));
+                _rumble.volume = _rumbleVol * AudioDirector.LoopDuck;
                 _rumble.pitch = 0.72f + 0.55f * speedNorm;
             }
 
