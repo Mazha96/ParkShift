@@ -18,6 +18,11 @@ Shader "ParkShift/GradientSkybox"
         _PlanetColor ("Planet Color", Color) = (0.99, 0.66, 0.7, 1)
         _PlanetCos ("Planet Size (cos of angular radius)", Range(0.99, 0.99995)) = 0.9975
         _HaloColor ("Planet Halo Color", Color) = (0.75, 0.35, 0.65, 1)
+        _RingColor ("Planet Ring Color", Color) = (0.85, 0.78, 0.62, 1)
+        _RingTilt ("Ring Tilt Axis (world dir)", Vector) = (0.35, 0.9, 0.2, 0)
+        _RingInner ("Ring Inner Radius (x planet radii)", Range(1.05, 3)) = 1.35
+        _RingOuter ("Ring Outer Radius (x planet radii)", Range(1.1, 4)) = 2.1
+        _RingIntensity ("Ring Intensity", Range(0, 2)) = 0
     }
     SubShader
     {
@@ -43,6 +48,11 @@ Shader "ParkShift/GradientSkybox"
             half4 _PlanetColor;
             float _PlanetCos;
             half4 _HaloColor;
+            half4 _RingColor;
+            float4 _RingTilt;
+            float _RingInner;
+            float _RingOuter;
+            float _RingIntensity;
 
             struct appdata
             {
@@ -114,6 +124,27 @@ Shader "ParkShift/GradientSkybox"
                 // slight vertical shade so the disc doesn't read as a sticker
                 float shade = 0.8 + 0.35 * saturate((dir.y - pdir.y) * 14.0 + 0.5);
                 col = lerp(col, _PlanetColor.rgb * shade, disc);
+
+                // ---- Planet ring: thin tilted ellipse band around the disc ----
+                // Small-angle band in a basis around the planet direction: u/v are the view
+                // offsets along two tangents, squashing v turns the circle into a tilted
+                // ellipse. Drawn after the disc so the near half (v < 0) passes in front;
+                // the far half is masked where the disc covers it.
+                if (_RingIntensity > 0.001 && c > 0.9)
+                {
+                    float angRad = acos(_PlanetCos);           // planet angular radius
+                    float3 t1 = normalize(cross(normalize(_RingTilt.xyz), pdir));
+                    float3 t2 = cross(pdir, t1);
+                    float3 offs = dir - pdir * c;
+                    float u = dot(offs, t1);
+                    float v = dot(offs, t2);
+                    float rr = sqrt(u * u + v * v * 9.0) / max(angRad, 1e-4);
+                    float band = smoothstep(_RingInner - 0.10, _RingInner, rr)
+                               * (1.0 - smoothstep(_RingOuter, _RingOuter + 0.10, rr));
+                    band *= 1.0 - disc * step(0.0, v);         // far half hides behind the planet
+                    band *= 0.65 + 0.35 * saturate(rr - _RingInner); // soft inner-to-outer fade
+                    col += _RingColor.rgb * band * _RingIntensity;
+                }
 
                 return fixed4(col, 1.0);
             }

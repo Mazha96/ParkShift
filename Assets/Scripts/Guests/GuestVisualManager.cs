@@ -135,7 +135,7 @@ namespace ParkShift.Guests
             Color hoodie = Color.HSVToRGB(Random.value, Random.Range(0.45f, 0.8f), Random.Range(0.7f, 1f));
             var g = GuestPrefab != null ? SpawnDewey(hoodie) : SpawnCapsule(hoodie);
             g.transform.position = SpawnPoint ? SpawnPoint.position : Vector3.zero;
-            // Queue life: phase-randomized idle bounce + cheer hops (self-managing component).
+            // Queue life: grounded, desynced weight-shift idle + cheer hops (self-managing component).
             g.AddComponent<ParkShift.Juice.GuestBounce>();
             _queueGuests.Add(g);
             _nodes.Add(SpawnNode);
@@ -180,16 +180,23 @@ namespace ParkShift.Guests
         GameObject SpawnCapsule(Color shirt)
         {
             var g = new GameObject("Guest");
+            // "Visual" wrapper as the FIRST child, pivoted at the feet like the root: body and
+            // head live under it so GuestBounce can sway/hop the whole figure as one (the old
+            // layout bobbed only the body capsule, leaving the head behind). The root stays
+            // the manager's positioning handle — queue MoveTowards, seat parenting and exit
+            // pathing all keep writing the root, never the wrapper.
+            var visual = new GameObject("Visual");
+            visual.transform.SetParent(g.transform, false);
             var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             Destroy(body.GetComponent<Collider>());
-            body.transform.SetParent(g.transform, false);
+            body.transform.SetParent(visual.transform, false);
             body.transform.localScale = new Vector3(0.42f, 0.55f, 0.42f);
             body.transform.localPosition = Vector3.up * 0.55f; // guest origin is at the feet
             if (GuestMaterial) body.GetComponent<Renderer>().material = GuestMaterial;
             body.GetComponent<Renderer>().material.color = shirt;
             var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             Destroy(head.GetComponent<Collider>());
-            head.transform.SetParent(g.transform, false);
+            head.transform.SetParent(visual.transform, false);
             head.transform.localScale = Vector3.one * 0.3f;
             head.transform.localPosition = Vector3.up * 1.28f;
             return g;

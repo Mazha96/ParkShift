@@ -8,7 +8,8 @@ namespace ParkShift.Vehicles
     /// twin octagonal tube rails, cross-ties, a continuous center spine box, support
     /// columns dropping to ground height with footers, brake-run fin strips on the brake
     /// block, and station running gear (deck + drive tires) on the station block(s).
-    /// Banking (roll from horizontal curvature, clamped) comes from TrackPath.FrameAtDistance.
+    /// Frames come from the parallel-transported FrameTable below (loop-safe); banking
+    /// (roll from horizontal curvature, clamped) is layered on for flat-ish turns only.
     /// All meshes are flat-shaded (per-face vertices) for the chunky look.
     /// Runtime-safe (no UnityEditor) so SceneBuilder and any future track editor can both use it.
     /// </summary>
@@ -56,6 +57,12 @@ namespace ParkShift.Vehicles
             public int[] StationBlocks = null;
             public int[] BrakeBlocks = null;
 
+            // Explicit brake-fin spans as (block, progress0, progress1) triples. When set, fins
+            // are laid only on these in-block arc ranges (e.g. just the flat mid-course shelf and
+            // the final brake straight) instead of across the whole brake block — layouts whose
+            // brake block also contains curves/hills need this. Null => legacy whole-block fins.
+            public Vector3[] FinSpans = null;
+
             // Optional material overrides (null => railMat / tieMat fallbacks)
             public Material SpineMaterial = null;
             public Material SupportMaterial = null;
@@ -82,19 +89,97 @@ namespace ParkShift.Vehicles
             Material supportMat = style.SupportMaterial != null ? style.SupportMaterial : tieMat;
             Material accentMat = style.AccentMaterial != null ? style.AccentMaterial : railMat;
 
-            CreateChild(root, "Rails", BuildRails(path, len, style), railMat);
-            CreateChild(root, "Spine", BuildSpine(path, len, style), spineMat);
-            CreateChild(root, "Ties", BuildTies(path, len, style), tieMat);
+            var frames = new FrameTable(path);
+            CreateChild(root, "Rails", BuildRails(frames, len, style), railMat);
+            CreateChild(root, "Spine", BuildSpine(frames, len, style), spineMat);
+            CreateChild(root, "Ties", BuildTies(frames, len, style), tieMat);
             if (style.BuildSupports)
-                CreateChild(root, "Supports", BuildSupports(path, len, style), supportMat);
+                CreateChild(root, "Supports", BuildSupports(frames, len, style), supportMat);
             if (style.BuildBrakeFins)
-                CreateChild(root, "BrakeFins", BuildBrakeFins(path, len, style), accentMat);
+                CreateChild(root, "BrakeFins", BuildBrakeFins(path, frames, len, style), accentMat);
             if (style.BuildStationGear)
             {
-                CreateChild(root, "StationRails", BuildStationDeck(path, len, style), tieMat);
-                CreateChild(root, "DriveTires", BuildDriveTires(path, len, style), accentMat);
+                CreateChild(root, "StationRails", BuildStationDeck(path, frames, len, style), tieMat);
+                CreateChild(root, "DriveTires", BuildDriveTires(path, frames, len, style), accentMat);
             }
             return root;
+        }
+
+        // ---------------- spline framing ----------------
+
+        /// <summary>
+        /// Parallel-transported frame table along the closed spline. TrackPath.FrameAtDistance
+        /// builds every frame from Quaternion.LookRotation(fwd, Vector3.up); that world-up
+        /// projection degenerates when the tangent goes vertical and flips 180° through the top
+        /// of a vertical loop. This table transports the up-vector along the tangent instead
+        /// (minimal-torsion / zero-roll transport), closes the loop seam by feathering any
+        /// residual roll around the lap, and re-applies TrackPath's curvature banking only where
+        /// the track is upright and near-horizontal so loop roll is never fought by the bank
+        /// clamp. Runtime-safe (no UnityEditor) and public on purpose: ride vehicles can build
+        /// one of these and sample the exact same frames as the rails — TrainVisual should swap
+        /// its Path.FrameAtDistance calls to FrameAt to ride the loop without the world-up flip.
+        /// </summary>
+        public class FrameTable
+        {
+            readonly TrackPath _path;
+            readonly Quaternion[] _rots;
+            readonly float _step;
+            readonly float _len;
+            readonly int _count;
+
+            public FrameTable(TrackPath path, float step = 0.5f)
+            {
+                _path = path;
+                path.Rebuild();
+                _len = path.TotalLength;
+                _count = Mathf.Max(8, Mathf.CeilToInt(_len / Mathf.Max(0.05f, step)));
+                _step = _len / _count;
+                _rots = new Quaternion[_count];
+
+                // Seed at d=0 (the station straight — flat by construction) and transport around.
+                Vector3 prevT = path.TangentAtDistance(0f);
+                Quaternion q = Quaternion.LookRotation(prevT, Vector3.up);
+                _rots[0] = q;
+                for (int i = 1; i < _count; i++)
+                {
+                    Vector3 t = path.TangentAtDistance(i * _step);
+                    q = Quaternion.FromToRotation(prevT, t) * q;
+                    _rots[i] = q;
+                    prevT = t;
+                }
+
+                // Seam closure: a full lap of transport can come home rolled (holonomy).
+                // Feather the residual roll across the lap so frame(len) == frame(0).
+                Vector3 t0 = path.TangentAtDistance(0f);
+                Quaternion qEnd = Quaternion.FromToRotation(prevT, t0) * q;
+                float residual = Vector3.SignedAngle(qEnd * Vector3.up, _rots[0] * Vector3.up, t0);
+                for (int i = 1; i < _count; i++)
+                    _rots[i] = _rots[i] * Quaternion.AngleAxis(residual * (i / (float)_count), Vector3.forward);
+
+                // Curvature banking, faded out on steep or inverted track (lift spine, loop)
+                // so only flat-ish turns bank and the transported roll is otherwise untouched.
+                for (int i = 0; i < _count; i++)
+                {
+                    Vector3 fwd = _rots[i] * Vector3.forward;
+                    Vector3 up = _rots[i] * Vector3.up;
+                    float horiz = Mathf.Clamp01(1f - Mathf.Abs(fwd.y) * 1.6f);
+                    if (up.y > 0.2f && horiz > 0.01f)
+                        _rots[i] = _rots[i] * Quaternion.AngleAxis(-_path.BankAtDistance(i * _step) * horiz, Vector3.forward);
+                }
+            }
+
+            public float TotalLength => _len;
+
+            /// <summary>Position + parallel-transported rotation at arc distance d (wrapped).</summary>
+            public void FrameAt(float d, out Vector3 pos, out Quaternion rot)
+            {
+                d = Mathf.Repeat(d, _len);
+                pos = _path.PointAtDistance(d);
+                float f = d / _step;
+                int i = Mathf.FloorToInt(f);
+                if (i >= _count) i = _count - 1;
+                rot = Quaternion.Slerp(_rots[i], _rots[(i + 1) % _count], f - i);
+            }
         }
 
         static void CreateChild(GameObject root, string name, Mesh mesh, Material mat)
@@ -152,7 +237,7 @@ namespace ParkShift.Vehicles
 
         // ---------------- rails ----------------
 
-        static Mesh BuildRails(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildRails(FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             int rings = Mathf.Max(12, Mathf.CeilToInt(len / st.RailRingStep));
@@ -166,7 +251,7 @@ namespace ParkShift.Vehicles
                 for (int r = 0; r < rings; r++)
                 {
                     float d = r / (float)rings * len;
-                    path.FrameAtDistance(d, out var pos, out var rot, out _);
+                    frames.FrameAt(d, out var pos, out var rot);
                     Vector3 c = pos + rot * new Vector3(side * st.RailOffset, 0f, 0f);
                     var arr = new Vector3[sides];
                     for (int k = 0; k < sides; k++)
@@ -194,7 +279,7 @@ namespace ParkShift.Vehicles
 
         // ---------------- spine ----------------
 
-        static Mesh BuildSpine(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildSpine(FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             int rings = Mathf.Max(8, Mathf.CeilToInt(len / st.SpineRingStep));
@@ -210,7 +295,7 @@ namespace ParkShift.Vehicles
             for (int r = 0; r < rings; r++)
             {
                 float d = r / (float)rings * len;
-                path.FrameAtDistance(d, out var pos, out var rot, out _);
+                frames.FrameAt(d, out var pos, out var rot);
                 Vector3 c = pos + rot * new Vector3(0f, -st.SpineDrop, 0f);
                 var arr = new Vector3[4];
                 for (int k = 0; k < 4; k++)
@@ -236,14 +321,14 @@ namespace ParkShift.Vehicles
 
         // ---------------- ties ----------------
 
-        static Mesh BuildTies(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildTies(FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             int count = Mathf.Max(4, Mathf.CeilToInt(len / st.TieStep));
             for (int i = 0; i < count; i++)
             {
                 float d = i / (float)count * len;
-                path.FrameAtDistance(d, out var pos, out var rot, out _);
+                frames.FrameAt(d, out var pos, out var rot);
                 Vector3 center = pos + rot * new Vector3(0f, -st.TieDrop, 0f);
                 b.AddBox(center, rot, st.TieSize);
             }
@@ -252,7 +337,7 @@ namespace ParkShift.Vehicles
 
         // ---------------- supports ----------------
 
-        static Mesh BuildSupports(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildSupports(FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             int count = Mathf.Max(1, Mathf.CeilToInt(len / st.SupportStep));
@@ -261,57 +346,85 @@ namespace ParkShift.Vehicles
             for (int i = 0; i < count; i++)
             {
                 float d = i / (float)count * len;
-                path.FrameAtDistance(d, out var pos, out var rot, out _);
+                frames.FrameAt(d, out var pos, out var rot);
+                // Inverted / steeply rolled track (loop) can't drop a plumb column from its
+                // spine — those spans get external bracing (the scene's loop ring) instead.
+                if ((rot * Vector3.up).y < 0.35f) continue;
                 Vector3 attach = pos + rot * new Vector3(0f, -spineUnderside, 0f);
                 float h = attach.y - st.GroundY;
                 if (h < st.SupportMinClearance) continue; // track hugs the ground here
 
                 // Vertical column: yawed with the track but never rolled (columns stay plumb).
+                // Tall lift/loop columns thicken with height so they don't read as spaghetti.
                 Vector3 fwd = rot * Vector3.forward;
                 float yaw = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
                 Quaternion colRot = Quaternion.Euler(0f, yaw, 0f);
+                float w = st.ColumnWidth * Mathf.Max(1f, Mathf.Sqrt(h * 0.25f));
 
                 b.AddBox(new Vector3(attach.x, st.GroundY + h * 0.5f, attach.z), colRot,
-                         new Vector3(st.ColumnWidth, h, st.ColumnWidth));
+                         new Vector3(w, h, w));
 
                 if (h > 0.45f) // concrete footer pad
                     b.AddBox(new Vector3(attach.x, st.GroundY + 0.09f, attach.z), colRot,
-                             new Vector3(0.7f, 0.18f, 0.7f));
+                             new Vector3(Mathf.Max(0.7f, w * 2.4f), 0.18f, Mathf.Max(0.7f, w * 2.4f)));
 
                 if (h > 0.8f)  // saddle beam hugging the spine (banked with the track)
                     b.AddBox(pos + rot * new Vector3(0f, -(spineUnderside + 0.07f), 0f), rot,
                              new Vector3(1.5f, 0.14f, 0.34f));
+
+                if (h > 9f)    // mid-height collar so very tall columns get a visual joint
+                    b.AddBox(new Vector3(attach.x, st.GroundY + h * 0.5f, attach.z), colRot,
+                             new Vector3(w * 1.6f, 0.3f, w * 1.6f));
             }
             return b.ToMesh("Supports");
         }
 
         // ---------------- brake fins ----------------
 
-        static Mesh BuildBrakeFins(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildBrakeFins(TrackPath path, FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
+
+            if (st.FinSpans != null)
+            {
+                // Explicit spans: fins only on the designated flat brake shelves.
+                for (int i = 0; i < st.FinSpans.Length; i++)
+                {
+                    Vector3 span = st.FinSpans[i];
+                    BlockSpan(path, len, Mathf.RoundToInt(span.x), Mathf.Clamp01(span.y), Mathf.Clamp01(span.z), out var f0, out var f1);
+                    AddFinRun(b, frames, len, f0, f1, st);
+                }
+                return b.ToMesh("BrakeFins");
+            }
+
             List<int> brakes = ResolveBlocks(path, st.BrakeBlocks, new[] { "brake" }, false);
             float endP = Mathf.Min(0.985f, path.BrakePoint01 + 0.05f);
 
             for (int i = 0; i < brakes.Count; i++)
             {
                 BlockSpan(path, len, brakes[i], 0.06f, endP, out var s0, out var s1);
-                int fins = Mathf.FloorToInt((s1 - s0) / st.FinStep);
-                for (int f = 0; f < fins; f++)
-                {
-                    float d = Mathf.Repeat(s0 + (f + 0.5f) * st.FinStep, len);
-                    path.FrameAtDistance(d, out var pos, out var rot, out _);
-                    // Center fin strip: tops out just under the train chassis, pokes above the spine.
-                    b.AddBox(pos + rot * new Vector3(0f, -0.21f, 0f), rot,
-                             new Vector3(0.055f, 0.22f, 0.5f));
-                }
+                AddFinRun(b, frames, len, s0, s1, st);
             }
             return b.ToMesh("BrakeFins");
         }
 
+        /// <summary>Lays a strip of brake fins along the arc span [s0, s1] (s1 may be unwrapped).</summary>
+        static void AddFinRun(FlatMeshBuilder b, FrameTable frames, float len, float s0, float s1, TrackStyle st)
+        {
+            int fins = Mathf.FloorToInt((s1 - s0) / st.FinStep);
+            for (int f = 0; f < fins; f++)
+            {
+                float d = Mathf.Repeat(s0 + (f + 0.5f) * st.FinStep, len);
+                frames.FrameAt(d, out var pos, out var rot);
+                // Center fin strip: tops out just under the train chassis, pokes above the spine.
+                b.AddBox(pos + rot * new Vector3(0f, -0.21f, 0f), rot,
+                         new Vector3(0.055f, 0.22f, 0.5f));
+            }
+        }
+
         // ---------------- station running gear ----------------
 
-        static Mesh BuildStationDeck(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildStationDeck(TrackPath path, FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             List<int> stations = ResolveBlocks(path, st.StationBlocks, new[] { "load", "station" }, true);
@@ -324,7 +437,7 @@ namespace ParkShift.Vehicles
                 for (int p = 0; p < pieces; p++)
                 {
                     float d = Mathf.Repeat(s0 + (p + 0.5f) * segLen, len);
-                    path.FrameAtDistance(d, out var pos, out var rot, out _);
+                    frames.FrameAt(d, out var pos, out var rot);
                     // Low center deck the drive tires poke through — the station "running rail".
                     b.AddBox(pos + rot * new Vector3(0f, -0.19f, 0f), rot,
                              new Vector3(0.6f, 0.1f, segLen + 0.05f));
@@ -333,7 +446,7 @@ namespace ParkShift.Vehicles
             return b.ToMesh("StationRails");
         }
 
-        static Mesh BuildDriveTires(TrackPath path, float len, TrackStyle st)
+        static Mesh BuildDriveTires(TrackPath path, FrameTable frames, float len, TrackStyle st)
         {
             var b = new FlatMeshBuilder();
             List<int> stations = ResolveBlocks(path, st.StationBlocks, new[] { "load", "station" }, true);
@@ -344,7 +457,7 @@ namespace ParkShift.Vehicles
                 for (int t = 0; t < tires; t++)
                 {
                     float d = Mathf.Repeat(s0 + (t + 0.5f) * st.TireStep, len);
-                    path.FrameAtDistance(d, out var pos, out var rot, out _);
+                    frames.FrameAt(d, out var pos, out var rot);
                     // Paired friction tires (octagonal discs on a lateral axle) under the RV chassis.
                     Quaternion axle = rot * Quaternion.Euler(0f, 90f, 0f); // prism Z -> track lateral
                     b.AddPrism(pos + rot * new Vector3(-0.13f, -0.28f, 0f), axle, 0.15f, 0.045f, 8);

@@ -16,8 +16,9 @@ namespace ParkShift.EditorTools
     /// <summary>
     /// One-click scene construction from primitives. Run: menu ParkShift → Build All Scenes.
     /// Rebuildable at any time; scenes are throwaway artifacts, this script is the source of truth.
-    /// Visual direction: stylized flat-color low-poly park at cosmic dusk — gradient space
-    /// skybox (stars + planet), warm low sun, cool violet ambient/fog, neon accents.
+    /// Visual direction (GALAXY EXPRESS): stylized flat-color low-poly park under a deep-space
+    /// night — near-black gradient skybox with dense stars and a big ringed planet, cool blue
+    /// moonlight key, indigo fog, cyan/magenta/purple neon, warm practicals around the station.
     /// </summary>
     public static class SceneBuilder
     {
@@ -283,10 +284,234 @@ namespace ParkShift.EditorTools
             return go;
         }
 
-        /// <summary>Shared dusk/space mood for every scene: gradient skybox material (custom
-        /// ParkShift/GradientSkybox with procedural stars + a planet; Skybox/Procedural tinted
-        /// to dusk as fallback), cool trilight ambient and violet distance fog. Realtime-only;
-        /// nothing here bakes. Reuses the existing Assets/Materials/Skybox.mat asset.</summary>
+        // ================= GALAXY EXPRESS coaster infrastructure helpers =================
+
+        /// <summary>Straight flight of steps from a top landing down to ground (y=0), descending
+        /// along <paramref name="rot"/>'s forward, with stringer handrails on both sides. Step
+        /// boxes keep their primitive colliders so the player can actually climb them.</summary>
+        static void BuildStairs(string name, Vector3 top, Quaternion rot, Transform parent, Material stepMat, Material railMat)
+        {
+            var root = new GameObject(name);
+            root.transform.position = top;
+            root.transform.SetParent(parent, true);
+            float h = Mathf.Max(0f, top.y);
+            if (h < 0.15f) return;
+            int n = Mathf.Max(1, Mathf.CeilToInt(h / 0.3f));
+            float rise = h / n;
+            const float run = 0.34f;
+            for (int i = 0; i < n; i++)
+            {
+                Vector3 c = top + rot * new Vector3(0f, 0f, (i + 0.5f) * run) + Vector3.down * ((i + 0.5f) * rise);
+                var step = Box($"{name}_Step{i:00}", c, new Vector3(1.0f, rise + 0.03f, run + 0.05f), stepMat, root.transform);
+                step.transform.rotation = rot;
+            }
+            foreach (float sideX in new[] { -0.55f, 0.55f })
+            {
+                Vector3 a = top + rot * new Vector3(sideX, 1.0f, 0f);
+                Vector3 b = top + rot * new Vector3(sideX, 1.0f, n * run) + Vector3.down * h;
+                var rail = Box($"{name}_Rail{(sideX < 0 ? "L" : "R")}", (a + b) * 0.5f,
+                               new Vector3(0.05f, 0.05f, Vector3.Distance(a, b) + 0.1f), railMat, root.transform);
+                rail.transform.rotation = Quaternion.LookRotation(b - a);
+            }
+        }
+
+        /// <summary>Maintenance catwalk hugging the spline between arc distances d0..d1 (the lift
+        /// hill): deck plates with walk-on colliders, brackets back to the spine, outer handrail,
+        /// and a stair flight from the lift base down to ground. Deck stays plumb (level
+        /// side-to-side) even where the track pitches, like a real chain-lift walkway.</summary>
+        static void BuildLiftCatwalk(TrackPath path, float d0, float d1, Transform parent,
+                                     Material deckMat, Material railMat, Material postMat)
+        {
+            var root = new GameObject("LiftCatwalk");
+            root.transform.SetParent(parent, false);
+            float span = d1 - d0;
+            if (span < 1f) return;
+            int steps = Mathf.CeilToInt(span / 1.4f);
+            float segLen = span / steps;
+            Vector3 prevRailTop = Vector3.zero;
+            for (int i = 0; i < steps; i++)
+            {
+                float d = d0 + (i + 0.5f) * segLen;
+                path.FrameAtDistance(d, out var pos, out var rot, out _);
+                Vector3 fwd = rot * Vector3.forward;
+                Quaternion frame = Quaternion.LookRotation(fwd, Vector3.up);
+                Vector3 side = frame * Vector3.left;   // west side — the walkway faces the park
+                Vector3 deckC = pos + side * 1.15f + Vector3.down * 0.35f;
+                var deck = Box($"CatwalkDeck{i:00}", deckC, new Vector3(0.8f, 0.06f, segLen + 0.12f), deckMat, root.transform);
+                deck.transform.rotation = frame;
+                var bracket = Box($"CatwalkBracket{i:00}", pos + side * 0.55f + Vector3.down * 0.42f,
+                                  new Vector3(1.0f, 0.07f, 0.12f), postMat, root.transform);
+                bracket.transform.rotation = frame;
+                Vector3 postC = deckC + side * 0.36f;
+                var post = Box($"CatwalkPost{i:00}", postC + Vector3.up * 0.55f, new Vector3(0.06f, 1.1f, 0.06f), railMat, root.transform);
+                post.transform.rotation = frame;
+                Vector3 railTop = postC + Vector3.up * 1.08f;
+                if (i > 0)
+                {
+                    var railSeg = Box($"CatwalkRail{i:00}", (prevRailTop + railTop) * 0.5f,
+                                      new Vector3(0.05f, 0.05f, Vector3.Distance(prevRailTop, railTop) + 0.06f), railMat, root.transform);
+                    railSeg.transform.rotation = Quaternion.LookRotation(railTop - prevRailTop);
+                }
+                prevRailTop = railTop;
+            }
+            // Stairs down from the lift base landing, descending to the walkway side (left of
+            // travel) so the flight never crosses back over the pre-lift track.
+            path.FrameAtDistance(d0, out var basePos, out var baseRot, out _);
+            Vector3 baseFwd = baseRot * Vector3.forward;
+            baseFwd.y = 0f;
+            Quaternion baseYaw = Quaternion.LookRotation(baseFwd.normalized, Vector3.up);
+            BuildStairs("LiftStairs", basePos + baseYaw * new Vector3(-1.15f, 0f, 0f) + Vector3.down * 0.35f,
+                        baseYaw * Quaternion.Euler(0f, 270f, 0f), root.transform, deckMat, railMat);
+        }
+
+        /// <summary>Evac walkway beside the track at arc distance dCenter (right-hand side of
+        /// travel): deck + handrails + neon edge strip + stairs to ground (or a single step when
+        /// the shelf sits at grade) + a look-to-reveal nameplate matching the block number.</summary>
+        static void BuildEvacPlatform(string name, TrackPath path, float dCenter, float length, Transform parent,
+                                      Material deckMat, Material railMat, Material accentMat, string label)
+        {
+            var root = new GameObject(name);
+            root.transform.SetParent(parent, false);
+            path.FrameAtDistance(dCenter, out var pos, out var rot, out _);
+            Vector3 fwd = rot * Vector3.forward;
+            fwd.y = 0f;
+            Quaternion yaw = Quaternion.LookRotation(fwd.normalized, Vector3.up);
+            Vector3 side = yaw * Vector3.right;
+            Vector3 deckC = pos + side * 1.35f + Vector3.down * 0.25f;
+            root.transform.position = deckC;
+            var deck = Box($"{name}_Deck", deckC, new Vector3(1.5f, 0.1f, length), deckMat, root.transform);
+            deck.transform.rotation = yaw;
+            for (int i = 0; i <= 4; i++)
+            {
+                var post = Box($"{name}_Post{i}", deckC + side * 0.68f + yaw * new Vector3(0f, 0f, -length * 0.5f + i * (length / 4f)) + Vector3.up * 0.5f,
+                               new Vector3(0.06f, 1.0f, 0.06f), railMat, root.transform);
+                post.transform.rotation = yaw;
+            }
+            var railTop = Box($"{name}_TopRail", deckC + side * 0.68f + Vector3.up * 1.0f, new Vector3(0.06f, 0.06f, length), railMat, root.transform);
+            railTop.transform.rotation = yaw;
+            var railMid = Box($"{name}_MidRail", deckC + side * 0.68f + Vector3.up * 0.6f, new Vector3(0.05f, 0.05f, length), railMat, root.transform);
+            railMid.transform.rotation = yaw;
+            var strip = Box($"{name}_EdgeStrip", deckC - side * 0.72f + Vector3.up * 0.08f, new Vector3(0.07f, 0.07f, length), accentMat, root.transform);
+            strip.transform.rotation = yaw;
+            if (deckC.y > 1.2f)
+            {
+                BuildStairs($"{name}_Stairs", deckC + yaw * new Vector3(0f, 0f, length * 0.5f), yaw, root.transform, deckMat, railMat);
+            }
+            else
+            {
+                var step = Box($"{name}_Step", deckC + yaw * new Vector3(0f, 0f, length * 0.5f + 0.35f) + Vector3.down * (deckC.y * 0.5f),
+                               new Vector3(1.0f, Mathf.Max(0.1f, deckC.y), 0.6f), deckMat, root.transform);
+                step.transform.rotation = yaw;
+            }
+            int legs = Mathf.Max(2, Mathf.CeilToInt(length / 3.5f));
+            for (int i = 0; i < legs; i++)
+            {
+                Vector3 lc = deckC + yaw * new Vector3(0f, 0f, -length * 0.5f + (i + 0.5f) * (length / legs));
+                if (lc.y > 0.4f)
+                {
+                    var leg = Box($"{name}_Leg{i}", new Vector3(lc.x, lc.y * 0.5f, lc.z), new Vector3(0.16f, lc.y, 0.16f), railMat, root.transform);
+                    leg.transform.rotation = yaw;
+                }
+            }
+            Label(root, label, 1.6f);
+        }
+
+        /// <summary>Big vertical ring brace hugging the loop (segments around a circle in the
+        /// world z-y plane, normal = x axis) with two ground legs + footers and a ring of
+        /// pulsing neon orbs — the loop's "external support" since plumb columns can't drop
+        /// from inverted spine. <paramref name="center"/> is the loop hub.</summary>
+        static void BuildLoopRing(Vector3 center, float radius, int segments, Transform parent, Material mat, Material orbMat)
+        {
+            var root = new GameObject("LoopRing");
+            root.transform.position = center;
+            root.transform.SetParent(parent, true);
+            float segLen = 2f * Mathf.PI * radius / segments;
+            for (int i = 0; i < segments; i++)
+            {
+                float a = (i + 0.5f) / segments * Mathf.PI * 2f;
+                Vector3 c = center + new Vector3(0f, Mathf.Sin(a), Mathf.Cos(a)) * radius;
+                var seg = Box($"RingSeg{i:00}", c, new Vector3(0.4f, 0.4f, segLen + 0.08f), mat, root.transform);
+                seg.transform.rotation = Quaternion.LookRotation(new Vector3(0f, Mathf.Cos(a), -Mathf.Sin(a)), Vector3.right);
+            }
+            foreach (float s in new[] { -1f, 1f })
+            {
+                Vector3 anchor = center + new Vector3(0f, -0.72f, 0.72f * s) * radius;
+                if (anchor.y > 0.2f)
+                {
+                    Box($"RingLeg{(s < 0 ? "S" : "N")}", new Vector3(anchor.x, anchor.y * 0.5f, anchor.z),
+                        new Vector3(0.45f, anchor.y, 0.45f), mat, root.transform);
+                    Box($"RingFoot{(s < 0 ? "S" : "N")}", new Vector3(anchor.x, 0.12f, anchor.z),
+                        new Vector3(1.1f, 0.24f, 1.1f), mat, root.transform);
+                }
+            }
+            var ringNeon = new GameObject("RingNeon");
+            ringNeon.transform.SetParent(root.transform, false);
+            for (int i = 0; i < 6; i++)
+            {
+                float a = i / 6f * Mathf.PI * 2f;
+                Ball($"RingOrb{i}", center + new Vector3(0f, Mathf.Sin(a), Mathf.Cos(a)) * (radius + 0.45f), 0.5f, orbMat, ringNeon.transform);
+            }
+            var pulse = ringNeon.AddComponent<PSEnv.NeonPulse>();
+            pulse.EmissionColor = new Color(1f, 0.3f, 0.85f);
+            pulse.Intensity = 2.2f; pulse.PulseAmount = 0.25f; pulse.Speed = 1.1f; pulse.Phase = 0.7f;
+        }
+
+        /// <summary>Neon ring gate around the track (ring plane normal = world x axis): a
+        /// 10-segment box ring + slender ground legs, all colliderless decor, running one
+        /// NeonPulse. Optional always-on marquee text floats above (both faces).</summary>
+        static void BuildRingGate(string name, Vector3 center, float radius, Transform parent,
+                                  Material mat, Color pulseColor, float phase, string marquee)
+        {
+            var root = new GameObject(name);
+            root.transform.position = center;
+            root.transform.SetParent(parent, true);
+            const int segs = 10;
+            float segLen = 2f * Mathf.PI * radius / segs;
+            for (int i = 0; i < segs; i++)
+            {
+                float a = (i + 0.5f) / segs * Mathf.PI * 2f;
+                var seg = Box($"{name}_Seg{i:00}", center + new Vector3(0f, Mathf.Sin(a), Mathf.Cos(a)) * radius,
+                              new Vector3(0.22f, 0.22f, segLen + 0.06f), mat, root.transform);
+                seg.transform.rotation = Quaternion.LookRotation(new Vector3(0f, Mathf.Cos(a), -Mathf.Sin(a)), Vector3.right);
+                Object.DestroyImmediate(seg.GetComponent<Collider>()); // decor — never blocks a look-ray
+            }
+            foreach (float s in new[] { -1f, 1f })
+            {
+                Vector3 anchor = center + new Vector3(0f, -0.7f, 0.7f * s) * radius;
+                if (anchor.y > 0.3f)
+                {
+                    var leg = Box($"{name}_Leg{(s < 0 ? "S" : "N")}", new Vector3(anchor.x, anchor.y * 0.5f, anchor.z),
+                                  new Vector3(0.18f, anchor.y, 0.18f), mat, root.transform);
+                    Object.DestroyImmediate(leg.GetComponent<Collider>());
+                }
+            }
+            var pulse = root.AddComponent<PSEnv.NeonPulse>();
+            pulse.EmissionColor = pulseColor;
+            pulse.Intensity = 2.3f; pulse.PulseAmount = 0.3f; pulse.Speed = 1.4f; pulse.Phase = phase;
+            if (!string.IsNullOrEmpty(marquee))
+            {
+                foreach (float face in new[] { -1f, 1f })
+                {
+                    var tgo = new GameObject($"{name}_Marquee{(face < 0 ? "W" : "E")}");
+                    tgo.transform.SetParent(root.transform, true);
+                    tgo.transform.position = center + new Vector3(0.14f * face, radius + 0.9f, 0f);
+                    tgo.transform.rotation = Quaternion.Euler(0f, face < 0 ? 270f : 90f, 0f);
+                    var tm = tgo.AddComponent<TextMesh>();
+                    tm.text = marquee;
+                    tm.characterSize = 0.22f; tm.fontSize = 48; tm.fontStyle = FontStyle.Bold;
+                    tm.anchor = TextAnchor.MiddleCenter;
+                    tm.color = new Color(0.45f, 0.95f, 1f);
+                }
+            }
+        }
+
+        /// <summary>Shared deep-space night mood for every scene (GALAXY EXPRESS theme):
+        /// gradient skybox material (custom ParkShift/GradientSkybox — near-black top,
+        /// dark-indigo horizon, dense stars and a big ringed planet low over the course;
+        /// Skybox/Procedural tinted dark as fallback), cool trilight ambient and deep
+        /// indigo distance fog pushed far enough out that the lift/loop skyline reads
+        /// from the booth. Realtime-only; nothing here bakes. Reuses the existing
+        /// Assets/Materials/Skybox.mat asset.</summary>
         static Material BuildDuskEnvironment(Light sun)
         {
             const string skyPath = "Assets/Materials/Skybox.mat";
@@ -301,52 +526,60 @@ namespace ParkShift.EditorTools
             sky.shader = shader;
             if (grad != null)
             {
-                sky.SetColor("_TopColor", new Color(0.045f, 0.04f, 0.15f));
-                sky.SetColor("_HorizonColor", new Color(0.96f, 0.47f, 0.32f));
-                sky.SetColor("_BottomColor", new Color(0.19f, 0.13f, 0.26f));
-                sky.SetFloat("_HorizonHeight", 0.01f);
-                sky.SetFloat("_HorizonFalloff", 1.5f);
-                sky.SetFloat("_StarDensity", 0.5f);
-                sky.SetFloat("_StarBrightness", 1.8f);
-                sky.SetVector("_PlanetDir", new Vector4(-0.45f, 0.24f, 0.86f, 0f));
-                sky.SetColor("_PlanetColor", new Color(0.99f, 0.66f, 0.7f));
-                sky.SetFloat("_PlanetCos", 0.9975f);
-                sky.SetColor("_HaloColor", new Color(0.75f, 0.35f, 0.65f));
+                sky.SetColor("_TopColor", new Color(0.006f, 0.007f, 0.018f));
+                sky.SetColor("_HorizonColor", new Color(0.10f, 0.10f, 0.28f));
+                sky.SetColor("_BottomColor", new Color(0.012f, 0.010f, 0.028f));
+                sky.SetFloat("_HorizonHeight", 0.0f);
+                sky.SetFloat("_HorizonFalloff", 2.2f);
+                sky.SetFloat("_StarDensity", 0.85f);
+                sky.SetFloat("_StarBrightness", 2.6f);
+                // Big ringed planet hanging low to the north-west — right over the coaster
+                // skyline (lift/loop/camel-backs) as seen from the operator booth.
+                sky.SetVector("_PlanetDir", new Vector4(-0.50f, 0.13f, 0.85f, 0f));
+                sky.SetColor("_PlanetColor", new Color(0.62f, 0.70f, 0.86f));
+                sky.SetFloat("_PlanetCos", 0.9915f);
+                sky.SetColor("_HaloColor", new Color(0.35f, 0.55f, 0.95f));
+                sky.SetColor("_RingColor", new Color(0.82f, 0.76f, 0.66f));
+                sky.SetVector("_RingTilt", new Vector4(0.30f, 0.90f, 0.25f, 0f));
+                sky.SetFloat("_RingInner", 1.4f);
+                sky.SetFloat("_RingOuter", 2.3f);
+                sky.SetFloat("_RingIntensity", 0.9f);
             }
             else
             {
-                sky.SetFloat("_SunSize", 0.05f);
-                sky.SetFloat("_AtmosphereThickness", 0.62f);
-                sky.SetFloat("_Exposure", 1.05f);
-                sky.SetColor("_SkyTint", new Color(0.55f, 0.35f, 0.68f));
-                sky.SetColor("_GroundColor", new Color(0.22f, 0.16f, 0.28f));
+                sky.SetFloat("_SunSize", 0.04f);
+                sky.SetFloat("_AtmosphereThickness", 0.45f);
+                sky.SetFloat("_Exposure", 0.8f);
+                sky.SetColor("_SkyTint", new Color(0.18f, 0.20f, 0.42f));
+                sky.SetColor("_GroundColor", new Color(0.05f, 0.05f, 0.10f));
             }
             EditorUtility.SetDirty(sky);
 
             RenderSettings.skybox = sky;
             RenderSettings.sun = sun;
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.4f, 0.36f, 0.62f);
-            RenderSettings.ambientEquatorColor = new Color(0.46f, 0.3f, 0.44f);
-            RenderSettings.ambientGroundColor = new Color(0.17f, 0.14f, 0.24f);
+            RenderSettings.ambientSkyColor = new Color(0.19f, 0.21f, 0.38f);
+            RenderSettings.ambientEquatorColor = new Color(0.11f, 0.10f, 0.24f);
+            RenderSettings.ambientGroundColor = new Color(0.05f, 0.05f, 0.11f);
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Linear;
-            RenderSettings.fogStartDistance = 42f;
-            RenderSettings.fogEndDistance = 150f;
-            RenderSettings.fogColor = new Color(0.36f, 0.23f, 0.42f);
+            RenderSettings.fogStartDistance = 55f;
+            RenderSettings.fogEndDistance = 210f;
+            RenderSettings.fogColor = new Color(0.05f, 0.06f, 0.15f);
             return sky;
         }
 
-        /// <summary>Warm low dusk sun shared by both scenes.</summary>
+        /// <summary>Cool low moon/starlight key shared by both scenes — dim blue so the neon
+        /// and warm station practicals carry the scene without it going unreadably dark.</summary>
         static Light MakeDuskSun()
         {
             var sun = new GameObject("Sun").AddComponent<Light>();
             sun.type = LightType.Directional;
-            sun.transform.rotation = Quaternion.Euler(26f, -38f, 0);
-            sun.intensity = 1.05f;
-            sun.color = new Color(1f, 0.72f, 0.52f);
+            sun.transform.rotation = Quaternion.Euler(32f, -30f, 0);
+            sun.intensity = 0.5f;
+            sun.color = new Color(0.60f, 0.70f, 1f);
             sun.shadows = LightShadows.Soft;
-            sun.shadowStrength = 0.75f;
+            sun.shadowStrength = 0.6f;
             return sun;
         }
 
@@ -447,30 +680,33 @@ namespace ParkShift.EditorTools
             var mPlanter  = Mat("Env_Planter",  new Color(0.55f, 0.36f, 0.52f), null, 0.15f, 0f, 1f);
             var mSoil     = Mat("Env_Soil",     new Color(0.23f, 0.16f, 0.20f), null, 0.05f, 0f, 1f);
             var mTrunk    = Mat("Env_Trunk",    new Color(0.42f, 0.28f, 0.24f), null, 0.10f, 0f, 1f);
-            var mFoliageA = Mat("Env_FoliageA", new Color(0.16f, 0.62f, 0.46f), null, 0.10f, 0f, 1f);
-            var mFoliageB = Mat("Env_FoliageB", new Color(0.36f, 0.75f, 0.48f), null, 0.10f, 0f, 1f);
-            var mRock     = Mat("Env_Rock",     new Color(0.48f, 0.45f, 0.60f), null, 0.10f, 0f, 1f);
-            var mHill     = Mat("Env_Hill",     new Color(0.25f, 0.17f, 0.38f), null, 0.05f, 0f, 1f);
-            var mHillFar  = Mat("Env_HillFar",  new Color(0.31f, 0.21f, 0.45f), null, 0.05f, 0f, 1f);
+            var mFoliageA = Mat("Env_FoliageA", new Color(0.10f, 0.48f, 0.46f), null, 0.10f, 0f, 1f); // alien teal
+            var mFoliageB = Mat("Env_FoliageB", new Color(0.38f, 0.26f, 0.60f), null, 0.10f, 0f, 1f); // nebula violet
+            var mRock     = Mat("Env_Rock",     new Color(0.36f, 0.34f, 0.48f), null, 0.10f, 0f, 1f);
+            var mHill     = Mat("Env_Hill",     new Color(0.09f, 0.08f, 0.16f), null, 0.05f, 0f, 1f); // crater ridge
+            var mHillFar  = Mat("Env_HillFar",  new Color(0.13f, 0.12f, 0.22f), null, 0.05f, 0f, 1f);
             var mLampPole = Mat("Env_LampPole", new Color(0.20f, 0.20f, 0.28f), null, 0.30f, 0.20f, 1f);
             var mNeonCyan    = GlowMat("Env_NeonCyan",    new Color(0.10f, 0.35f, 0.38f), new Color(0.25f, 0.95f, 1f),   2.4f);
             var mNeonMagenta = GlowMat("Env_NeonMagenta", new Color(0.38f, 0.10f, 0.30f), new Color(1f, 0.30f, 0.85f),   2.4f);
+            var mNeonPurple  = GlowMat("Env_NeonPurple",  new Color(0.22f, 0.12f, 0.42f), new Color(0.62f, 0.35f, 1f),   2.4f);
             var mLampGlow    = GlowMat("Env_LampGlow",    new Color(0.45f, 0.35f, 0.20f), new Color(1f, 0.75f, 0.45f),   2.0f);
             var mStringBulb  = GlowMat("Env_StringBulb",  new Color(0.45f, 0.38f, 0.18f), new Color(1f, 0.85f, 0.50f),   1.8f);
-            var mCrystal     = GlowMat("Env_Crystal",     new Color(0.30f, 0.20f, 0.55f), new Color(0.65f, 0.40f, 1f),   1.2f);
+            var mCrystal     = GlowMat("Env_Crystal",     new Color(0.30f, 0.20f, 0.55f), new Color(0.65f, 0.40f, 1f),   1.5f);
 
             // Dewey guest model + animator (null-safe: capsule fallback if FBX is absent)
             var deweyPrefab = SetupDeweyModel();
             var deweyCtrl = deweyPrefab != null ? BuildGuestAnimator() : null;
 
-            // Lighting — cosmic dusk: low warm sun with long soft shadows, cool violet
-            // trilight ambient, gradient space skybox (stars + planet) and matching fog.
+            // Lighting — deep-space night: dim cool moonlight key with soft shadows, cold
+            // trilight ambient, star-field skybox with a ringed planet, and indigo fog. Warm
+            // practicals (canopy, booth, lamps) keep the playable station area readable.
             var sun = MakeDuskSun();
             BuildDuskEnvironment(sun);
             QualitySettings.shadowDistance = 70f;
 
-            // Ground + station platform
-            Box("Floor", new Vector3(0, -0.5f, 8), new Vector3(70, 1, 60), mFloor);
+            // Ground + station platform. The floor grew with the GALAXY EXPRESS footprint
+            // (course reaches x≈-35 / z≈78); the plaza/queue south edge is unchanged.
+            Box("Floor", new Vector3(0, -0.5f, 28), new Vector3(120, 1, 122), mFloor);
             Box("StationPlatform", new Vector3(0, 0.25f, 0), new Vector3(14, 0.5f, 3.5f), mPlatform);
 
             // ---- Access ramps: ground (0) <-> platform top (0.5), gentle ~13 degree plates ----
@@ -535,7 +771,7 @@ namespace ParkShift.EditorTools
                     Box("ColumnBase", new Vector3(cx, 0.4f, cz), new Vector3(0.5f, 0.8f, 0.5f), mRoof, stationRoot.transform);
                     Box("ColumnCap", new Vector3(cx, 3.72f, cz), new Vector3(0.44f, 0.2f, 0.44f), mRoof, stationRoot.transform);
                 }
-            // ---- "COSMIC CONVEYOR" marquee above the south (queue-side) roof edge ----
+            // ---- "GALAXY EXPRESS" marquee above the south (queue-side) roof edge ----
             var sign = new GameObject("StationSign");
             sign.transform.SetParent(stationRoot.transform, false);
             Box("SignBoard", new Vector3(0, 4.85f, -2.3f), new Vector3(8.6f, 1.15f, 0.22f), mBooth, sign.transform);
@@ -552,16 +788,27 @@ namespace ParkShift.EditorTools
                 go.transform.position = sPos;
                 go.transform.rotation = Quaternion.Euler(0, sYRot, 0);
                 var tm = go.AddComponent<TextMesh>();
-                tm.text = "COSMIC CONVEYOR";
+                tm.text = "GALAXY EXPRESS";
                 tm.characterSize = 0.16f; tm.fontSize = 50; tm.fontStyle = FontStyle.Bold;
                 tm.anchor = TextAnchor.MiddleCenter;
-                tm.color = new Color(1f, 0.5f, 0.92f);
+                tm.color = new Color(0.55f, 0.9f, 1f);
             };
             SignText("SignTextS", new Vector3(0, 4.85f, -2.45f), 0f);    // readable from the queue
             SignText("SignTextN", new Vector3(0, 4.85f, -2.15f), 180f);  // readable from the course
             var signPulse = sign.AddComponent<PSEnv.NeonPulse>();
             signPulse.EmissionColor = new Color(1f, 0.3f, 0.85f);
             signPulse.Intensity = 2.4f; signPulse.PulseAmount = 0.2f; signPulse.Speed = 0.9f; signPulse.Phase = 1.7f;
+            // Warm canopy practical: deep-space key light is dim, so the platform work area
+            // carries its own warm pool (matches the booth light; no shadows — cheap).
+            var canopyLightGO = new GameObject("CanopyLight");
+            canopyLightGO.transform.position = new Vector3(0, 3.4f, 0.6f);
+            canopyLightGO.transform.SetParent(stationRoot.transform, true);
+            var canopyLight = canopyLightGO.AddComponent<Light>();
+            canopyLight.type = LightType.Point;
+            canopyLight.range = 11f;
+            canopyLight.intensity = 1.25f;
+            canopyLight.color = new Color(1f, 0.8f, 0.58f);
+            canopyLight.shadows = LightShadows.None;
             // Platform edge neon (helps night readability of the drop-off)
             Box("PlatformEdgeNeonS", new Vector3(0, 0.54f, -1.72f), new Vector3(14f, 0.06f, 0.06f), mNeonMagenta, stationRoot.transform);
             Box("PlatformEdgeNeonW", new Vector3(-6.97f, 0.54f, 0f), new Vector3(0.06f, 0.06f, 3.4f), mNeonMagenta, stationRoot.transform);
@@ -579,53 +826,144 @@ namespace ParkShift.EditorTools
                 Box($"FenceMidRail{(sideX < 0 ? "L" : "R")}", new Vector3(sideX, 0.95f, -1.7f), new Vector3(5.4f, 0.06f, 0.06f), mWhite, stationRoot.transform);
             }
 
-            // ---- Track: rounded-rectangle loop, 20 waypoints, 5 blocks of 4.
-            // The station straight (z=2.2) is split: block 0 = UNLOAD (entry / left, RV parks at x=-3)
-            // and block 1 = LOAD (exit / right, RV parks at x=+3), so two RVs park at once a full
-            // block apart. Blocks 2-4 = Launch, Course, Brake run. ----
+            // ---- Track: GALAXY EXPRESS — 53-waypoint space coaster, 5 blocks. The station
+            // straight (z=2.2, x -6..6) is byte-identical to the old layout so the platform,
+            // gates, queue and booth all stay put: block 0 = UNLOAD (RV parks at x=-3) and
+            // block 1 = LOAD (RV parks at x=+3). The course then runs: pre-lift turn → chain
+            // LIFT HILL (block 2, crest ~22m — a held train rests on the chain, catwalk evac)
+            // → first drop → VERTICAL LOOP (clothoid-ish: ~7.5m radius at the bottom, ~5.6m at
+            // the top; entry/exit offset 3.6m in x so the bottom never self-intersects) →
+            // rising banked turn → ZERO-G SECTOR (block 3: three floaty camel-backs) →
+            // sweeping high banked turn → elevated MID-COURSE BRAKE RUN (flat + straight, evac
+            // platform) → diving turn home (block 4) → ground-level FINAL BRAKE RUN into the
+            // station. Block boundaries are data-driven (BlockStarts) and land only on
+            // plausible stopping track: station straight, lift chain, and the two flat brake
+            // shelves — never mid-loop or mid-hill. ----
             var trackGO = new GameObject("Track");
             var path = trackGO.AddComponent<TrackPath>();
             path.BlockCount = 5;
-            Vector2[] layout =
+            path.SamplesPerSegment = 14;   // dense arc table — keeps loop framing smooth
+            path.MaxBankDegrees = 44f;     // rising + high turns lean harder than the old 32°
+            Vector3[] layout =
             {
-                // Station straight (9 pts, x -6..6). Equal slices -> Unload park x=-3, Load park x=+3.
-                new Vector2(-6, 2.2f), new Vector2(-4.5f, 2.2f), new Vector2(-3, 2.2f), new Vector2(-1.5f, 2.2f),
-                new Vector2(0, 2.2f), new Vector2(1.5f, 2.2f), new Vector2(3, 2.2f), new Vector2(4.5f, 2.2f), new Vector2(6, 2.2f),
-                // Block 2: LAUNCH — east side heading out
-                new Vector2(12, 5f), new Vector2(16, 10f), new Vector2(16, 15f),
-                // Block 3: COURSE — far straight
-                new Vector2(12, 20f), new Vector2(2, 22f), new Vector2(-8, 21f), new Vector2(-15, 17f),
-                // Block 4: BRAKE RUN — west side returning, straightens out before the station
-                new Vector2(-17, 11f), new Vector2(-15, 6f), new Vector2(-11.5f, 2.2f), new Vector2(-8.5f, 2.2f),
-            };
-            string[] blockNames = { "UNLOAD", "LOAD", "LAUNCH", "COURSE", "BRAKE RUN" };
-            // Gentle elevation: flat station, launch climbs, course crests, brake run descends.
-            float[] heights =
-            {
-                0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f, 0.6f,   // STATION (Unload + Load, flat)
-                1.0f, 2.0f, 2.8f,                                        // LAUNCH climb
-                3.2f, 3.4f, 3.0f, 2.2f,                                  // COURSE crest
-                1.4f, 1.0f, 0.7f, 0.6f,                                  // BRAKE RUN descent
+                // 0-8 STATION straight (unchanged: Unload parks x=-3, Load parks x=+3)
+                new Vector3(-6f, 0.6f, 2.2f), new Vector3(-4.5f, 0.6f, 2.2f), new Vector3(-3f, 0.6f, 2.2f),
+                new Vector3(-1.5f, 0.6f, 2.2f), new Vector3(0f, 0.6f, 2.2f), new Vector3(1.5f, 0.6f, 2.2f),
+                new Vector3(3f, 0.6f, 2.2f), new Vector3(4.5f, 0.6f, 2.2f), new Vector3(6f, 0.6f, 2.2f),
+                // 9-16 BLOCK 2: pre-lift turn + chain lift (boundary at the crest)
+                new Vector3(11f, 0.9f, 4.5f), new Vector3(14.5f, 1.5f, 7.5f), new Vector3(17f, 2.1f, 11f),
+                new Vector3(18.4f, 2.6f, 13.5f),   // lift base — catwalk + stairs start here
+                new Vector3(19f, 7f, 19.5f), new Vector3(19.4f, 12f, 25.5f),
+                new Vector3(19.7f, 16.8f, 31.5f), new Vector3(19.9f, 20.6f, 37f),
+                // 17 BLOCK 3 start: lift crest
+                new Vector3(20f, 22.2f, 41f),
+                // 18-20 first drop + pull-out valley
+                new Vector3(19.8f, 14.5f, 45.5f), new Vector3(19.4f, 5f, 49f), new Vector3(19f, 1.7f, 52.5f),
+                // 21-29 VERTICAL LOOP (x drifts 18.8 → 15.2 through the inversion)
+                new Vector3(18.8f, 1.3f, 57f),     // entry
+                new Vector3(18.4f, 3.2f, 63.5f),
+                new Vector3(18f, 8.8f, 66.5f),     // climbing vertical
+                new Vector3(17.5f, 13.6f, 64.5f),
+                new Vector3(17f, 15.4f, 60.5f),    // top — fully inverted
+                new Vector3(16.5f, 13.6f, 56.5f),
+                new Vector3(16f, 8.8f, 54.5f),     // diving vertical
+                new Vector3(15.6f, 3.4f, 56f),
+                new Vector3(15.2f, 1.4f, 61f),     // exit
+                // 30-32 rising banked turn onto the zero-g straight (now heading west)
+                new Vector3(13.5f, 3.5f, 68f), new Vector3(10f, 5.5f, 73.5f), new Vector3(4.5f, 7f, 77f),
+                // 33-38 ZERO-G SECTOR: three camel-backs (crest / valley / crest / valley / crest / exit)
+                new Vector3(-1f, 10.8f, 77.5f), new Vector3(-6.5f, 5.2f, 77.5f),
+                new Vector3(-12f, 10.2f, 77.5f), new Vector3(-17.5f, 5.2f, 77.5f),
+                new Vector3(-23f, 9.6f, 77.5f), new Vector3(-28f, 5.4f, 77f),
+                // 39-44 sweeping high banked turn into the elevated mid-course brake run
+                new Vector3(-32.5f, 6.5f, 73f), new Vector3(-34.5f, 7f, 67f), new Vector3(-34.5f, 6.2f, 60.5f),
+                new Vector3(-34f, 5.4f, 54f), new Vector3(-34f, 5.4f, 47f), new Vector3(-34f, 5.4f, 40f),
+                // 45 BLOCK 4 start: mid-course brake run end
+                new Vector3(-33.7f, 5.2f, 34f),
+                // 46-52 diving turn home + ground-level final brake run into the station
+                new Vector3(-31.5f, 3.8f, 27f), new Vector3(-26.5f, 2.6f, 21f), new Vector3(-20.5f, 1.7f, 16.5f),
+                new Vector3(-16f, 1f, 11.5f), new Vector3(-14f, 0.7f, 6f),
+                new Vector3(-12f, 0.6f, 2.2f), new Vector3(-8.5f, 0.6f, 2.2f),
             };
             for (int i = 0; i < layout.Length; i++)
             {
                 var wp = new GameObject($"WP_{i:00}");
                 wp.transform.SetParent(trackGO.transform);
-                wp.transform.position = new Vector3(layout[i].x, heights[i], layout[i].y);
+                wp.transform.position = layout[i];
                 path.Waypoints.Add(wp.transform);
-                if (i % 4 == 0)
-                {
-                    var post = Box($"BlockMarker_{i / 4}", wp.transform.position + new Vector3(0, 0.6f, 1.4f),
-                                   new Vector3(0.12f, 1.2f, 0.12f), mTrack, trackGO.transform);
-                    Label(post, "BLOCK " + (i / 4) + ": " + blockNames[i / 4], 0.9f);
-                }
             }
+
+            // Data-driven block boundaries snapped to waypoints. Trick: while BlockStarts is
+            // still empty and BlockCount equals the waypoint count, DistanceOf(i, 0) returns
+            // exactly waypoint i's arc distance — normalized starts (and the evac/catwalk
+            // anchor distances below) fall out without hand-integrating the spline.
+            path.Rebuild();
+            float trackLen = path.TotalLength;
+            path.BlockCount = layout.Length;
+            var wpDist = new float[layout.Length];
+            for (int i = 0; i < layout.Length; i++) wpDist[i] = path.DistanceOf(i, 0f);
+            path.BlockCount = 5;
+            int[] boundaryWp = { 0, 4, 8, 17, 45 };
+            string[] blockNames = { "UNLOAD", "LOAD", "LIFT HILL", "LOOP + ZERO-G", "BRAKE RUN" };
+            path.BlockStarts = new List<float>();
+            path.BlockLabels = new List<string>();
+            for (int b = 0; b < boundaryWp.Length; b++)
+            {
+                path.BlockStarts.Add(wpDist[boundaryWp[b]] / trackLen);
+                path.BlockLabels.Add(blockNames[b]);
+                var post = Box($"BlockMarker_{b}", layout[boundaryWp[b]] + new Vector3(0, 0.6f, 1.4f),
+                               new Vector3(0.12f, 1.2f, 0.12f), mTrack, trackGO.transform);
+                Label(post, "BLOCK " + b + ": " + blockNames[b], 0.9f);
+            }
+            // Normalized in-block progress of waypoint i inside block b (for the fin spans).
+            System.Func<int, int, float> BlockP = (b, i) =>
+            {
+                float s0 = wpDist[boundaryWp[b]];
+                float s1 = b + 1 < boundaryWp.Length ? wpDist[boundaryWp[b + 1]] : trackLen;
+                float s = wpDist[i];
+                if (s < s0) s += trackLen;
+                return Mathf.Clamp01((s - s0) / Mathf.Max(0.01f, s1 - s0));
+            };
+
             // Full styled track mesh along the spline: twin octagonal rails, ties, center spine,
-            // plumb support columns with footers (TrackMeshBuilder's own Supports child — no
-            // primitive support boxes needed here anymore), neon brake fins and station drive tires.
+            // plumb support columns with footers (auto-skipped through the inversion — the loop
+            // ring below braces it instead), neon brake fins on the two flat brake shelves only,
+            // and station drive tires.
             var trackStyle = new TrackMeshBuilder.TrackStyle();
             trackStyle.AccentMaterial = mNeonCyan; // brake fins + drive tires pick up the neon accent
+            trackStyle.SupportStep = 3.2f;         // taller layout — denser support forest
+            trackStyle.FinSpans = new[]
+            {
+                new Vector3(3f, BlockP(3, 42) + 0.005f, BlockP(3, 45) - 0.005f), // mid-course brake shelf
+                new Vector3(4f, BlockP(4, 50), 0.985f),                          // final brake run
+            };
             TrackMeshBuilder.Build(path, mRail, mTie, trackStyle);
+
+            // ---- Coaster infrastructure: lift catwalk, loop ring brace, zero-g ring gates,
+            // evac platforms on both brake shelves, ground-level assembly point ----
+            var coasterInfra = new GameObject("CoasterInfra");
+            BuildLiftCatwalk(path, wpDist[12], wpDist[17], coasterInfra.transform, mBooth, mWhite, mLampPole);
+            BuildLoopRing(new Vector3(17f, 9.4f, 60.5f), 8.6f, 17, coasterInfra.transform, mWhite, mNeonMagenta);
+            int[] gateWp = { 33, 35, 37 };
+            for (int g = 0; g < gateWp.Length; g++)
+                BuildRingGate($"ZeroGGate{g}", layout[gateWp[g]] + Vector3.up * 0.9f, 2.7f,
+                              coasterInfra.transform, g % 2 == 0 ? mNeonCyan : mNeonMagenta,
+                              g % 2 == 0 ? new Color(0.25f, 0.95f, 1f) : new Color(1f, 0.3f, 0.85f),
+                              g * 1.3f, g == 0 ? "ZERO-G SECTOR" : null);
+            // Evac platform names match the block numbers a held train actually stops in.
+            BuildEvacPlatform("EvacPlatformB3", path, wpDist[43], 10f, coasterInfra.transform,
+                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B3");
+            BuildEvacPlatform("EvacPlatformB4", path, wpDist[51] + 1.2f, 6f, coasterInfra.transform,
+                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B4");
+            // Ground-level muster area beside the maintenance bay, clear of the course.
+            var muster = new GameObject("EvacAssemblyPoint");
+            muster.transform.position = new Vector3(-17f, 0f, -0.5f);
+            muster.transform.SetParent(coasterInfra.transform, true);
+            Box("AssemblyPad", new Vector3(-17f, 0.03f, -0.5f), new Vector3(4.6f, 0.06f, 3.6f), mGate, muster.transform);
+            Box("AssemblyPadCore", new Vector3(-17f, 0.055f, -0.5f), new Vector3(3.8f, 0.06f, 2.8f), mBooth, muster.transform);
+            Cyl("AssemblySignPole", new Vector3(-18.9f, 1.1f, -1.9f), new Vector3(0.08f, 1.1f, 0.08f), mLampPole, muster.transform);
+            var musterSign = Box("AssemblySign", new Vector3(-18.9f, 2.35f, -1.9f), new Vector3(1.5f, 0.7f, 0.1f), mGate, muster.transform);
+            Label(musterSign, "EVAC ASSEMBLY POINT", 0.6f);
 
             // ---- Trains (Blender CoasterTrain.fbx; procedural factory as fallback) ----
             var trainPrefab = Prop("CoasterTrain.fbx");
@@ -928,13 +1266,14 @@ namespace ParkShift.EditorTools
                 new Vector3(0.7f, 1.4f, 0.7f), new Vector3(0f, 0.7f, 0f));
             Label(crash, "CONTACT POINT", 1.5f);
 
-            // Evac winch out on the course (valleyed-train recovery — a real hike for the tech).
+            // Evac winch out on the course (valleyed-train recovery — a real hike for the tech:
+            // it lives under the ZERO-G SECTOR valley now, the layout's natural valleying spot).
             // Red Blender lever (box fallback); throws + cranks while the tech works the recovery.
             // The lever is permanent equipment; the beacon above it only shows during the fault.
             var evacPrefab = Prop("EvacLever.fbx");
             if (evacPrefab != null)
             {
-                var evac = PlaceProp(evacPrefab, "EvacLever", new Vector3(0, 0.5f, 19.5f), 180f);
+                var evac = PlaceProp(evacPrefab, "EvacLever", new Vector3(-6.5f, 0.5f, 74.5f), 180f);
                 var pivot = FindDeep(evac.transform, "EvacLever_Pivot");
                 // Interaction volume on the lever wrapper, raised to cover the handle. Trigger-only.
                 AddInteractor(evac.transform, PanelInteractable.Kind.WinchPanel,
@@ -944,26 +1283,27 @@ namespace ParkShift.EditorTools
             }
             else
             {
-                var winch = Box("EvacWinch", new Vector3(0, 0.7f, 19.5f), new Vector3(0.9f, 1.1f, 0.6f), mPanel);
+                var winch = Box("EvacWinch", new Vector3(-6.5f, 0.7f, 74.5f), new Vector3(0.9f, 1.1f, 0.6f), mPanel);
                 winch.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.WinchPanel;
                 winch.AddComponent<InteractableGlow>();
                 Label(winch, "EVAC WINCH", 1.0f);
             }
-            // Stalled-train indicator out on the course (red flag; non-interactable, toggled by FaultPropController).
-            var valleyBeacon = MakeFaultFlag("ValleyedBeacon", new Vector3(0, 3.4f, 21f), 0f, 1.4f);
+            // Stalled-train indicator out on the course (red flag; non-interactable, toggled by
+            // FaultPropController) — parked at zero-g crest 2 where a valleyed train would hang.
+            var valleyBeacon = MakeFaultFlag("ValleyedBeacon", new Vector3(-12f, 10.6f, 77.5f), 0f, 1.4f);
             Label(valleyBeacon, "TRAIN STALLED", 2.2f);
 
             // ---- Zone sensor post out by block 2 (BlockSensorGhost step 1: the operator hikes
-            // to the launch zone and visually confirms the block is clear before the reset). ----
+            // to the lift-hill zone and visually confirms the block is clear before the reset). ----
             var zoneSensor = new GameObject("ZoneSensorPost");
-            zoneSensor.transform.position = new Vector3(14.2f, 0f, 10f);
-            Cyl("SensorPole", new Vector3(14.2f, 0.75f, 10f), new Vector3(0.09f, 0.75f, 0.09f), mLampPole, zoneSensor.transform);
-            Box("SensorHead", new Vector3(14.2f, 1.6f, 10f), new Vector3(0.3f, 0.3f, 0.3f), mBooth, zoneSensor.transform);
+            zoneSensor.transform.position = new Vector3(16.3f, 0f, 13f);
+            Cyl("SensorPole", new Vector3(16.3f, 0.75f, 13f), new Vector3(0.09f, 0.75f, 0.09f), mLampPole, zoneSensor.transform);
+            Box("SensorHead", new Vector3(16.3f, 1.6f, 13f), new Vector3(0.3f, 0.3f, 0.3f), mBooth, zoneSensor.transform);
             AddInteractor(zoneSensor.transform, PanelInteractable.Kind.BlockVerify,
                 new Vector3(0.9f, 1.9f, 0.9f), new Vector3(0f, 0.95f, 0f));
             Label(zoneSensor, "ZONE SENSOR", 2.1f);
             // Phantom-occupancy beacon on the post — lit only while the ghost fault is active.
-            var ghostBeacon = Ball("GhostSensorBeacon", new Vector3(14.2f, 2.05f, 10f), 0.32f, mNeonMagenta, zoneSensor.transform);
+            var ghostBeacon = Ball("GhostSensorBeacon", new Vector3(16.3f, 2.05f, 13f), 0.32f, mNeonMagenta, zoneSensor.transform);
 
             // ---- Lap-bar check points along the Load berth edge (RestraintJammedCar: the HMI
             // names the flagged car; checking the wrong car is refused by the sim). ----
@@ -1199,9 +1539,9 @@ namespace ParkShift.EditorTools
             {
                 new Vector3(-12f, 0, -14f), new Vector3(12.5f, 0, -13f), new Vector3(-16f, 0, -7f),
                 new Vector3(16.5f, 0, -10f), new Vector3(10f, 0, -18.5f), new Vector3(-9f, 0, -19.5f),
-                new Vector3(20f, 0, 16f), new Vector3(-21f, 0, 3f), new Vector3(-6f, 0, 10f),
+                new Vector3(26f, 0, 15f), new Vector3(-21f, 0, 3f), new Vector3(-6f, 0, 10f),
                 new Vector3(5f, 0, 13f), new Vector3(0f, 0, 26f), new Vector3(22f, 0, 26f),
-                new Vector3(-24f, 0, 22f), new Vector3(-12f, 0, 26f), new Vector3(25f, 0, 8f),
+                new Vector3(-28f, 0, 10f), new Vector3(-12f, 0, 26f), new Vector3(25f, 0, 8f),
             };
             for (int tIdx = 0; tIdx < treeSpots.Length; tIdx++)
                 Tree($"Tree{tIdx:00}", treeSpots[tIdx], Rnd(0.9f, 1.5f),
@@ -1245,6 +1585,35 @@ namespace ParkShift.EditorTools
             CrystalCluster("Crystals01", new Vector3(-20f, 0, 14f));
             CrystalCluster("Crystals02", new Vector3(10f, 0, 25f));
             CrystalCluster("Crystals03", new Vector3(-6.5f, 0, -20f));
+            CrystalCluster("Crystals04", new Vector3(23.5f, 0, 57f));   // beside the loop
+            CrystalCluster("Crystals05", new Vector3(-9f, 0, 71f));     // under the zero-g sector
+            CrystalCluster("Crystals06", new Vector3(-29.5f, 0, 45f));  // at the MCBR footings
+
+            // ---- Satellite dishes: tilted low-poly comms dishes scanning the night sky,
+            // purple beacon tips blinking via NeonPulse ----
+            System.Action<string, Vector3, float, float> Dish = (dName, dPos, dYaw, dPhase) =>
+            {
+                var dish = new GameObject(dName);
+                dish.transform.position = dPos;
+                dish.transform.SetParent(parkRoot.transform, true);
+                Cyl("DishBase", dPos + new Vector3(0, 0.25f, 0), new Vector3(0.5f, 0.25f, 0.5f), mLampPole, dish.transform);
+                Cyl("DishMast", dPos + new Vector3(0, 1.0f, 0), new Vector3(0.14f, 0.6f, 0.14f), mLampPole, dish.transform);
+                Vector3 bowlC = dPos + new Vector3(0, 1.9f, 0);
+                Vector3 n = Quaternion.Euler(52f, dYaw, 0f) * Vector3.up;
+                var bowl = Cyl("DishBowl", bowlC, new Vector3(2.2f, 0.09f, 2.2f), mWhite, dish.transform);
+                bowl.transform.rotation = Quaternion.Euler(52f, dYaw, 0f);
+                Object.DestroyImmediate(bowl.GetComponent<Collider>());
+                var feed = Cyl("DishFeed", bowlC + n * 0.55f, new Vector3(0.05f, 0.55f, 0.05f), mLampPole, dish.transform);
+                feed.transform.rotation = Quaternion.Euler(52f, dYaw, 0f);
+                Object.DestroyImmediate(feed.GetComponent<Collider>());
+                Ball("DishTip", bowlC + n * 1.1f, 0.26f, mNeonPurple, dish.transform);
+                var dp = dish.AddComponent<PSEnv.NeonPulse>();
+                dp.EmissionColor = new Color(0.62f, 0.35f, 1f);
+                dp.Intensity = 2.0f; dp.PulseAmount = 0.45f; dp.Speed = 2.6f; dp.Phase = dPhase;
+            };
+            Dish("Dish00", new Vector3(26f, 0, 36f), -40f, 0.4f);   // east of the lift hill
+            Dish("Dish01", new Vector3(-26f, 0, 60f), 30f, 2.1f);   // inside the western turn
+            Dish("Dish02", new Vector3(-20f, 0, -14f), 160f, 4.4f); // plaza south-west corner
 
             // ---- Lamp posts (warm bulbs; a couple carry real point lights) ----
             System.Func<string, Vector3, bool, GameObject> Lamp = (lName, lPos, realLight) =>
@@ -1312,16 +1681,21 @@ namespace ParkShift.EditorTools
             Box("MaintTrim", new Vector3(-14, 2.66f, -7.4f), new Vector3(8.2f, 0.1f, 0.26f), mNeonMagenta);
             Lamp("MaintLamp", new Vector3(-10.8f, 0, -6.6f), true);
 
-            // ---- Horizon: low-poly hill silhouettes so the skyline isn't empty ----
-            var hillsRoot = new GameObject("Hills");
+            // ---- Horizon: dark crater ridges ringing the site so the skyline isn't empty.
+            // Pushed out past the enlarged floor and recentered on the bigger footprint;
+            // occasional twin peaks read as crater rims against the star field. ----
+            var hillsRoot = new GameObject("CraterRidges");
             hillsRoot.transform.SetParent(parkRoot.transform, false);
-            for (int hIdx = 0; hIdx < 14; hIdx++)
+            for (int hIdx = 0; hIdx < 16; hIdx++)
             {
-                float ang = hIdx * (Mathf.PI * 2f / 14f) + Rnd(0f, 0.3f);
-                float dist = 58f + Rnd(0f, 26f);
-                var hp = new Vector3(Mathf.Cos(ang) * dist, -1.5f, Mathf.Sin(ang) * dist + 8f);
-                Cone($"Hill{hIdx:00}", hp, Rnd(14f, 26f), Rnd(7f, 16f), 8,
-                     hIdx % 3 == 0 ? mHillFar : mHill, hillsRoot.transform);
+                float ang = hIdx * (Mathf.PI * 2f / 16f) + Rnd(0f, 0.28f);
+                float dist = 95f + Rnd(0f, 38f);
+                var hp = new Vector3(Mathf.Cos(ang) * dist, -1.5f, Mathf.Sin(ang) * dist + 28f);
+                Material hm = hIdx % 3 == 0 ? mHillFar : mHill;
+                Cone($"CraterRidge{hIdx:00}", hp, Rnd(16f, 30f), Rnd(8f, 18f), 8, hm, hillsRoot.transform);
+                if (hIdx % 4 == 0)
+                    Cone($"CraterRim{hIdx:00}", hp + new Vector3(Rnd(10f, 16f), 0.4f, Rnd(-6f, 6f)),
+                         Rnd(9f, 14f), Rnd(5f, 9f), 7, hm, hillsRoot.transform);
             }
 
             // ---- Managers, spawn, bootstrap ----
