@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: abeaf34641a686940a0dafeb49a434fb, type: 3}
+  m_Name: SimConfig_Testbed6
+  m_EditorClassIdentifier:
+  ShiftLengthSeconds: 180
+  SeatsPerTrain: 8
+  BlockTraverseSeconds: 6
+  GuestSpawnInterval: 1.6
+  DispatchTimeoutSeconds: 35
+  RandomFaultChancePerSecond: 0.022
+  AssistantFixSeconds: 8
+  BlockCount: 6
+  TrainCount: 3
+  BlockSpeedMultipliers:
+  - 1
+  - 1.6
+  - 1.15
+  - 1.15
+  - 1.15
+  - 0.55
+  SmoothMotion: 1
+  BrakePoint01: 0.92
+  BrakeDecel: 0.6
+  LaunchAccel: 0.9

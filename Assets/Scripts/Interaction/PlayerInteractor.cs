@@ -23,7 +23,9 @@ namespace ParkShift.Interaction
             CurrentPrompt = null;
             if (Cam == null) return;
             var ray = new Ray(Cam.transform.position, Cam.transform.forward);
-            if (Physics.Raycast(ray, out var hit, Range))
+            // Interaction colliders are triggers (so they never shove the player). Force the ray to
+            // hit triggers regardless of the project-wide "Queries Hit Triggers" physics setting.
+            if (Physics.Raycast(ray, out var hit, Range, ~0, QueryTriggerInteraction.Collide))
             {
                 var it = hit.collider.GetComponentInParent<IInteractable>();
                 if (it != null)

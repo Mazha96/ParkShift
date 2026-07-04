@@ -13,6 +13,7 @@ namespace ParkShift.Core
         public bool StopsRide;            // full ride stop (motion frozen)
         public bool RequiresTechnician;   // must be fixed at maintenance panel
         public bool RequiresLoto;         // LOTO lever must be engaged before fix
+        public bool RequiresInspection;   // a physical inspect step must happen before resolve
         public float SatisfactionHit;     // one-time hit when triggered
         public int ScorePenalty;
     }
@@ -22,6 +23,7 @@ namespace ParkShift.Core
         public FaultDefinition Def;
         public float TriggeredAt;
         public bool LotoSatisfied;
+        public bool Inspected;
     }
 
     /// <summary>Generates and tracks faults. Random faults roll per second; condition faults
@@ -61,6 +63,25 @@ namespace ParkShift.Core
                 FixHint = "Technician: engage LOTO lever, reset at maintenance panel, release LOTO.",
                 BlocksDispatch = true, StopsRide = true, RequiresTechnician = true, RequiresLoto = true,
                 SatisfactionHit = 8f, ScorePenalty = 40 } },
+            { FaultType.TrackIntrusion, new FaultDefinition {
+                Type = FaultType.TrackIntrusion, Severity = FaultSeverity.Major,
+                HmiMessage = "E-STOP — PERSON DETECTED ON TRACK, ZONE 1",
+                FixHint = "Technician: go to the track and escort the guest back to the platform.",
+                BlocksDispatch = true, StopsRide = true, RequiresTechnician = true,
+                SatisfactionHit = 10f, ScorePenalty = 50 } },
+            { FaultType.TrainCollision, new FaultDefinition {
+                Type = FaultType.TrainCollision, Severity = FaultSeverity.Major,
+                HmiMessage = "COLLISION — TRAIN CONTACT ON BRAKE RUN APPROACH",
+                FixHint = "Technician: inspect the contact point, engage LOTO, then drive reset in the bay.",
+                BlocksDispatch = true, StopsRide = true, RequiresTechnician = true,
+                RequiresLoto = true, RequiresInspection = true,
+                SatisfactionHit = 15f, ScorePenalty = 80 } },
+            { FaultType.TrainValleyed, new FaultDefinition {
+                Type = FaultType.TrainValleyed, Severity = FaultSeverity.Major,
+                HmiMessage = "TRAIN VALLEYED — STALLED IN COURSE SECTION",
+                FixHint = "Technician: engage LOTO, crank the evac winch out on the course, release LOTO.",
+                BlocksDispatch = true, StopsRide = true, RequiresTechnician = true, RequiresLoto = true,
+                SatisfactionHit = 12f, ScorePenalty = 60 } },
         };
 
         readonly List<ActiveFault> _active = new List<ActiveFault>();
@@ -75,6 +96,17 @@ namespace ParkShift.Core
             FaultType.RestraintNotVerified, FaultType.GateSensorFault,
             FaultType.GuestDroppedItem, FaultType.MaintenanceResetRequired
         };
+
+        /// <summary>Major incidents rolled only while an auto-operator runs the booth
+        /// (technician scenario mode) — the tech's job is to clear these.</summary>
+        static readonly FaultType[] TechScenarioPool =
+        {
+            FaultType.TrackIntrusion, FaultType.TrainCollision,
+            FaultType.TrainValleyed, FaultType.MaintenanceResetRequired
+        };
+
+        /// <summary>When true, major incident faults roll in addition to the base pool.</summary>
+        public bool TechScenarioMode;
 
         public FaultSystem(SimConfig cfg, int seed = 0)
         {
@@ -93,6 +125,19 @@ namespace ParkShift.Core
                 var t = RandomPool[_rng.Next(RandomPool.Length)];
                 Trigger(t, simTime);
             }
+            // Technician scenario: one major incident at a time, on its own clock
+            if (TechScenarioMode && !AnyStopsRide
+                && _rng.NextDouble() < _cfg.TechFaultChancePerSecond * dt)
+            {
+                var t = TechScenarioPool[_rng.Next(TechScenarioPool.Length)];
+                Trigger(t, simTime);
+            }
+        }
+
+        public void MarkInspected(FaultType type)
+        {
+            var f = _active.Find(a => a.Def.Type == type);
+            if (f != null) f.Inspected = true;
         }
 
         public ActiveFault Trigger(FaultType type, float simTime)
@@ -116,6 +161,7 @@ namespace ParkShift.Core
             var f = _active.Find(a => a.Def.Type == type);
             if (f == null) return false;
             if (f.Def.RequiresLoto && !f.LotoSatisfied) return false;
+            if (f.Def.RequiresInspection && !f.Inspected) return false;
             _active.Remove(f);
             OnFaultResolved?.Invoke(f);
             return true;

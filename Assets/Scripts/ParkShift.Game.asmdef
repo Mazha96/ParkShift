@@ -1,10 +1,11 @@
 {
   "name": "ParkShift.Game",
   "rootNamespace": "ParkShift",
-  "references": ["ParkShift.Core", "FishNet.Runtime"],
+  "references": ["ParkShift.Core", "FishNet.Runtime", "Unity.Postprocessing.Runtime"],
   "noEngineReferences": false,
   "autoReferenced": true,
   "versionDefines": [
-    { "name": "com.firstgeargames.fishnet", "expression": "", "define": "FISHNET" }
+    { "name": "com.firstgeargames.fishnet", "expression": "", "define": "FISHNET" },
+    { "name": "com.unity.postprocessing", "expression": "", "define": "POSTFX" }
   ]
 }

@@ -1,0 +1,6 @@
+[1] no co-occupancy: True -> PASS
+[2] two RVs in station (Unload+Load): True -> PASS
+[3] riders dropped at Unload(0): True -> PASS
+[4] dispatch only when loaded + next clear: True, dispatches=27 -> PASS
+[5] interlock holds unloaded RV until Load frees: True -> PASS
+ALL PASS

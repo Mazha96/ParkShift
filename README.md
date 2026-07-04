@@ -78,7 +78,7 @@ mono coretest.exe   # runs all 9 tests + a scripted 180s bot playtest
 - Telemetry writes to `Application.persistentDataPath/parkshift_telemetry.txt`
   on scene exit and mirrors to the Console live.
 
-## The 6 faults
+## The 9 faults
 
 | Fault | Trigger | Consequence | Fix |
 |---|---|---|---|
@@ -88,3 +88,43 @@ mono coretest.exe   # runs all 9 tests + a scripted 180s bot playtest
 | Dispatch Timeout | platform train idle too long | satisfaction drain | get the train out |
 | Guest Dropped Item | random | dispatch hold | walk to item, pick up |
 | Maintenance Reset Required | random (major) | **ride stops** | Tech role → LOTO lever → drive reset → release |
+| Track Intrusion | tech mode (major) | **e-stop** | Tech: walk to the track, escort the guest off |
+| Train Collision | tech mode (major) | **ride stops** | Tech: inspect contact point → LOTO → drive reset → release |
+| Train Valleyed | tech mode (major) | **ride stops** | Tech: LOTO → crank EVAC WINCH out on the course → release |
+
+## Props
+
+Station gates, coaster trains (with animated lap bars), the booth dispatch console
+(lever + button), the drive cabinet (door swings open for maintenance, breaker drops on
+LOTO), and queue stanchions are Blender-authored FBXs in `Assets/Models/`, placed by the
+scene builder and animated by code drivers in `Assets/Scripts/Attraction/PropDrivers.cs`
+that mirror sim state. Every prop falls back to the old primitive version if its FBX is
+missing. If a hinge swings the wrong way after a re-export, flip the sign on the driver's
+`*Euler` field in the scene (they're public).
+
+## Guests: Dewey
+
+Guests are instances of `Assets/Models/Dewey.fbx` (exported from the Dewey Blender file)
+with randomized hoodie tints and an animator (Idle / Walk / Sit — clips authored in
+Blender, looped on import by the scene builder). The track-intrusion incident also uses
+Dewey. If the FBX is missing, the game falls back to capsule guests. Tunables live on
+the `Queue` object's `GuestVisualManager`: `GuestScale`, `MoveSpeed`, `SitOffset`.
+
+## Graphics
+
+Materials are PBR-textured from `Assets/Textures/{set}_albedo.png` + `{set}_normal.png`
+(sets: `concrete`, `asphalt`, `metal`, `paint`, `seat`, `wood`). The bundled textures are
+procedurally generated; to upgrade, download any CC0 texture pack (e.g. from
+**ambientcg.com** or **polyhaven.com**), rename the color map to `{set}_albedo.png` and
+the normal map to `{set}_normal.png`, drop them in `Assets/Textures/`, and re-run
+**ParkShift → Build All Scenes**. Bloom/ACES/vignette/AO post-processing activates
+automatically once the `com.unity.postprocessing` package resolves (already in the manifest).
+
+## Technician mode (solo)
+
+Tab to **Technician** and an auto-operator covers the booth: it keeps loading,
+verifying, and dispatching trains, and quietly clears operator-level faults.
+In exchange, **major incidents start rolling** (the three tech-mode faults above,
+plus drive trips) — one at a time, and they're yours. The HUD shows
+"AUTO-OP COVERING THE BOOTH" while it's active; Tab back to Operator and the
+booth is yours again (and major incidents stop rolling).

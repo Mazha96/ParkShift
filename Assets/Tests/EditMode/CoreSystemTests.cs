@@ -18,6 +18,9 @@ namespace ParkShift.Tests
         [Test] public void BlockOccupancy() => Run(CoreTestSuite.Test_BlockOccupancy);
         [Test] public void DispatchRules() => Run(CoreTestSuite.Test_DispatchRules);
         [Test] public void BlockHoldAndStacking() => Run(CoreTestSuite.Test_BlockHoldAndStacking);
+        [Test] public void SeparateLoadUnload() => Run(CoreTestSuite.Test_SeparateLoadUnload);
+        [Test] public void UnloadWorkflow() => Run(CoreTestSuite.Test_UnloadWorkflow);
+        [Test] public void AddTrain() => Run(CoreTestSuite.Test_AddTrain);
         [Test] public void FaultTriggerAndResolution() => Run(CoreTestSuite.Test_FaultTriggerAndResolution);
         [Test] public void DispatchTimeoutFault() => Run(CoreTestSuite.Test_DispatchTimeoutFault);
         [Test] public void ScoreCalculation() => Run(CoreTestSuite.Test_ScoreCalculation);

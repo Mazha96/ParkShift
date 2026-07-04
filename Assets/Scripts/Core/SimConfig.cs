@@ -6,7 +6,42 @@ namespace ParkShift.Core
         public float ShiftLengthSeconds = 180f;     // 3-minute vertical slice
         public int SeatsPerTrain = 8;
         public int BlockCount = 4;                  // 0=Station, 1=Launch, 2=Course, 3=BrakeRun
+        public int TrainCount = 2;                  // RVs in the system. Need >= BlockCount-1 to keep cycling without a deadlock.
         public float BlockTraverseSeconds = 6f;     // time to cross one block at full speed
+
+        // ---- Two-position station (Unload then Load) ----
+        // Off by default: block 0 is a single station where one RV unloads AND loads in place
+        // (original behaviour; keeps the headless tests unchanged). When on, the station spans two
+        // blocks — block 0 = Unload, block 1 = Load — so two RVs can park at once: one dropping
+        // riders at Unload while another boards at Load. An emptied RV auto-crawls Unload->Load.
+        public bool SeparateLoadUnload = false;
+        /// <summary>Block where arriving RVs drop their riders. Always 0 (the circuit completes here).</summary>
+        public int UnloadBlock => 0;
+        /// <summary>Block where RVs board guests and dispatch from. Same as Unload unless the station is split.</summary>
+        public int LoadBlock => SeparateLoadUnload ? 1 : 0;
+        /// <summary>Where in a station block an RV parks (0..1). 0.5 = block centre, so the Unload and
+        /// Load RVs sit a full block apart and never overlap at the shared block boundary. Split only.</summary>
+        public float StationParkProgress = 0.5f;
+        /// <summary>How long the guest unload takes once restraints are released (stand up + walk out).
+        /// The Unload area is considered clear after this, freeing the RV and allowing the door to close.</summary>
+        public float UnloadSeconds = 4f;
+
+        // ---- Motion feel (the "stacking up on the brake run" easing) ----
+        // Core defaults keep instant motion + a hard stop at the block exit so the headless
+        // tests stay deterministic. The Unity layer opts into smoothing for the actual feel,
+        // mirroring how BlockSpeedMultipliers is left null by default.
+        /// <summary>When true, RVs ramp up from a stop and coast smoothly to a halt at the
+        /// block brake point instead of snapping to full speed / hard-stopping at the exit.</summary>
+        public bool SmoothMotion = false;
+        /// <summary>Where inside a block a gated RV brakes to a stop (0..1 progress).
+        /// 1 = stop right at the exit (legacy). ~0.9 leaves it parked short of the next block.</summary>
+        public float BrakePoint01 = 1f;
+        /// <summary>Deceleration used by the brake governor, in block-progress units / s^2.
+        /// Higher = later, harder braking; lower = long lazy coast onto the brake run.</summary>
+        public float BrakeDecel = 0.6f;
+        /// <summary>Acceleration when launching from a stop, in block-progress units / s^2.
+        /// Smaller = softer roll-out of the station; large = effectively instant.</summary>
+        public float LaunchAccel = 0.9f;
         public float GuestSpawnInterval = 1.6f;     // seconds per guest into queue
         public int QueueCapacity = 40;
         public float GuestBoardSeconds = 0.35f;     // per guest boarding time
@@ -16,6 +51,20 @@ namespace ParkShift.Core
         public float SatisfactionDrainFaulted = 1.2f;     // per second while ride is down
         public float SatisfactionPerRider = 0.8f;         // gain per completed rider
         public float AssistantFixSeconds = 8f;            // "call remote tech" auto-fix delay
+        public float TechFaultChancePerSecond = 0.03f;    // major incident rate while in tech scenario mode
+
+        /// <summary>Optional per-block speed multiplier (>1 = faster). Index = block.
+        /// Null or short array falls back to 1.0 — keeps default timing and tests unchanged.</summary>
+        public float[] BlockSpeedMultipliers;
+
+        /// <summary>Effective seconds to traverse a given block.</summary>
+        public float TraverseSecondsFor(int block)
+        {
+            if (BlockSpeedMultipliers == null || block < 0 || block >= BlockSpeedMultipliers.Length)
+                return BlockTraverseSeconds;
+            float m = BlockSpeedMultipliers[block];
+            return m > 0.01f ? BlockTraverseSeconds / m : BlockTraverseSeconds;
+        }
 
         public static SimConfig Solo()
         {

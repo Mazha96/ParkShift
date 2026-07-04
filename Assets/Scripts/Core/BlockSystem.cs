@@ -37,6 +37,13 @@ namespace ParkShift.Core
             if (_occupant[block] == trainId) _occupant[block] = -1;
         }
 
+        /// <summary>Register an RV onto a block at spawn (used to stage trains into the system).</summary>
         public void ForcePlace(int block, int trainId) { _occupant[block] = trainId; }
+
+        /// <summary>Unregister an RV from wherever it sits — the matching call for despawn.</summary>
+        public void Vacate(int trainId)
+        {
+            for (int i = 0; i < _occupant.Length; i++) if (_occupant[i] == trainId) _occupant[i] = -1;
+        }
     }
 }

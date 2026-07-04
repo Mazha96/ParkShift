@@ -12,7 +12,11 @@ namespace ParkShift.Core
         public AttractionState State { get; private set; } = AttractionState.Closed;
         public readonly SimConfig Config;
         public readonly BlockSystem Blocks;
-        public readonly TrainSim[] Trains;
+        TrainSim[] _trains;
+        /// <summary>Active RVs. Grows when the operator adds one from the HMI (see AddTrain).</summary>
+        public TrainSim[] Trains => _trains;
+        /// <summary>Fired when a new RV is added at runtime so the visual layer can spawn its body.</summary>
+        public event Action<TrainSim> OnTrainAdded;
         public readonly GuestSim Guests;
         public readonly FaultSystem Faults;
         public readonly ScoreSystem Score = new ScoreSystem();
@@ -26,6 +30,20 @@ namespace ParkShift.Core
         public event Action<AttractionState> OnStateChanged;
         public event Action OnShiftEnded;
 
+        // ---- Unload workflow (split station only) ----
+        /// <summary>The Unload-side door. Guests cannot leave the RV until it is open.</summary>
+        public bool UnloadDoorOpen { get; private set; }
+        /// <summary>Restraints on the Unload RV have been released — guests may now stand up and exit.</summary>
+        public bool RestraintsReleased { get; private set; }
+        /// <summary>True when no guests are mid-unload (start state and after each unload completes).</summary>
+        public bool UnloadAreaClear { get; private set; } = true;
+        /// <summary>True while guests are standing up / walking out after a restraints release.</summary>
+        public bool GuestsUnloading { get; private set; }
+        /// <summary>Fired when the operator releases restraints — the visual layer plays the
+        /// stand-up + walk-to-exit flow for that RV's riders.</summary>
+        public event Action<TrainSim> OnUnloadReleased;
+        float _unloadTimer;
+
         bool _stackingFaultLatched;
         bool _timeoutFaultLatched;
         float _holdingSeconds;
@@ -37,9 +55,23 @@ namespace ParkShift.Core
             Blocks = new BlockSystem(cfg.BlockCount);
             Guests = new GuestSim(cfg);
             Faults = new FaultSystem(cfg, seed);
-            Trains = new TrainSim[2];
-            Trains[0] = new TrainSim(0, Blocks, 0);                    // platform train
-            Trains[1] = new TrainSim(1, Blocks, cfg.BlockCount - 1);   // staged on brake run
+            // Spawn & register every RV with the block system. Train 0 sits in the station;
+            // the rest stage downstream from the brake run backward (block N-1, N-2, ...),
+            // which reproduces the original two-train {0, N-1} layout and stages extras
+            // nose-to-tail so over-dispatching shows as brake-run stacking. ForcePlace is the
+            // registration hook; BlockSystem.Vacate is the matching unregister on despawn.
+            int trainCount = Math.Max(1, Math.Min(cfg.TrainCount, cfg.BlockCount)); // at most one RV per block
+            int loadBlock = cfg.LoadBlock;                             // 0 normally; 1 when the station is split
+            float park = cfg.SeparateLoadUnload ? cfg.StationParkProgress : 0f;
+            _trains = new TrainSim[trainCount];
+            _trains[0] = new TrainSim(0, Blocks, loadBlock, loadBlock, park); // platform RV parks at the Load block centre
+            for (int i = 1; i < trainCount; i++)
+            {
+                int startBlock = cfg.BlockCount - i;                   // N-1, N-2, ... staged toward the brake run
+                while (startBlock > loadBlock && !Blocks.IsClear(startBlock)) startBlock--; // never share a block
+                if (startBlock <= loadBlock) startBlock = FirstClearStagingBlock(loadBlock);
+                _trains[i] = new TrainSim(i, Blocks, startBlock, loadBlock, park);
+            }
             Faults.OnFaultTriggered += f =>
             {
                 Guests.Penalize(f.Def.SatisfactionHit);
@@ -122,6 +154,48 @@ namespace ParkShift.Core
                 Telemetry.Log(SimTime, "OPS", "Track swept, guest item recovered");
         }
 
+        // ---- Unload-side operator verbs (split station) ----
+
+        /// <summary>Open the Unload door. Allowed only with an RV parked at Unload.</summary>
+        public bool OpenUnloadDoor()
+        {
+            if (UnloadingTrain() == null || UnloadDoorOpen) return false;
+            UnloadDoorOpen = true;
+            Telemetry.Log(SimTime, "OPS", "Unload door opened");
+            return true;
+        }
+
+        /// <summary>Close the Unload door. Allowed only once guests have cleared the area.</summary>
+        public bool CloseUnloadDoor()
+        {
+            if (!UnloadDoorOpen || !UnloadAreaClear) return false;
+            UnloadDoorOpen = false;
+            RestraintsReleased = false;
+            Telemetry.Log(SimTime, "OPS", "Unload door closed");
+            return true;
+        }
+
+        /// <summary>Release restraints on the Unload RV — drops the riders and starts the guest walk-out.
+        /// Requires an RV at Unload with the door already open.</summary>
+        public bool ReleaseRestraints()
+        {
+            var rv = UnloadingTrain();
+            if (rv == null || !UnloadDoorOpen || RestraintsReleased) return false;
+            RestraintsReleased = true;
+            GuestsUnloading = true;
+            UnloadAreaClear = false;
+            _unloadTimer = Config.UnloadSeconds;
+            int riders = rv.Unload(Config);   // RV empties now; the visual layer plays the walk-out
+            if (riders > 0)
+            {
+                Score.AddRiders(riders);
+                Guests.RewardRiders(riders);
+                Telemetry.Log(SimTime, "OPS", $"Restraints released — {riders} guests unloading");
+            }
+            OnUnloadReleased?.Invoke(rv);
+            return true;
+        }
+
         public bool CanDispatch(out string reason)
         {
             var t = PlatformTrain();
@@ -137,7 +211,7 @@ namespace ParkShift.Core
             if (Guests.GatesOpen) { reason = "Close gates before dispatch"; return false; }
             if (Faults.AnyBlocksDispatch) { reason = "Active fault holds dispatch"; return false; }
             if (!RidePowered) { reason = "Ride power is locked out"; return false; }
-            if (!Blocks.IsClear(Blocks.NextBlock(0))) { reason = "Block 1 occupied"; return false; }
+            if (!Blocks.IsClear(Blocks.NextBlock(Config.LoadBlock))) { reason = "Next block occupied"; return false; }
             return true;
         }
 
@@ -167,9 +241,45 @@ namespace ParkShift.Core
 
         public bool MaintenanceReset()
         {
-            if (!Faults.HasFault(FaultType.MaintenanceResetRequired)) return false;
-            bool ok = Faults.Resolve(FaultType.MaintenanceResetRequired);
-            if (!ok) Telemetry.Log(SimTime, "MAINT", "Reset refused — LOTO not engaged");
+            bool any = false;
+            if (Faults.HasFault(FaultType.MaintenanceResetRequired))
+            {
+                if (Faults.Resolve(FaultType.MaintenanceResetRequired)) any = true;
+                else Telemetry.Log(SimTime, "MAINT", "Reset refused — LOTO not engaged");
+            }
+            if (Faults.HasFault(FaultType.TrainCollision))
+            {
+                if (Faults.Resolve(FaultType.TrainCollision))
+                { any = true; Telemetry.Log(SimTime, "MAINT", "Collision cleared — drive reset accepted"); }
+                else Telemetry.Log(SimTime, "MAINT", "Reset refused — inspect the contact point and engage LOTO first");
+            }
+            return any;
+        }
+
+        /// <summary>Technician walks to the track and escorts the intruding guest off.</summary>
+        public bool EscortIntruder()
+        {
+            if (!Faults.Resolve(FaultType.TrackIntrusion)) return false;
+            Telemetry.Log(SimTime, "MAINT", "Guest escorted off the track — e-stop cleared");
+            return true;
+        }
+
+        /// <summary>Technician inspects the collision contact point (prerequisite for drive reset).</summary>
+        public bool InspectCollision()
+        {
+            if (!Faults.HasFault(FaultType.TrainCollision)) return false;
+            Faults.MarkInspected(FaultType.TrainCollision);
+            Telemetry.Log(SimTime, "MAINT", "Collision damage inspected — LOTO + drive reset to clear");
+            return true;
+        }
+
+        /// <summary>Technician cranks the evac winch to recover a valleyed train (LOTO required).</summary>
+        public bool WinchValleyedTrain()
+        {
+            if (!Faults.HasFault(FaultType.TrainValleyed)) return false;
+            bool ok = Faults.Resolve(FaultType.TrainValleyed);
+            Telemetry.Log(SimTime, "MAINT", ok ? "Valleyed train winched to the brake run"
+                                               : "Winch refused — LOTO not engaged");
             return ok;
         }
 
@@ -188,16 +298,57 @@ namespace ParkShift.Core
 
             foreach (var t in Trains)
             {
-                bool completed = t.Tick(dt, Config.BlockTraverseSeconds, RidePowered);
+                bool completed = t.Tick(dt, Config, RidePowered);
                 if (completed)
                 {
-                    int riders = t.Unload();
-                    if (riders > 0)
+                    if (Config.SeparateLoadUnload)
                     {
-                        Score.AddRiders(riders);
-                        Guests.RewardRiders(riders);
-                        Telemetry.Log(SimTime, "OPS", $"Train {t.Id} returned, {riders} riders served");
+                        if (t.Riders > 0)
+                        {
+                            // RV carrying guests: hold them aboard until the operator opens the door and
+                            // releases restraints. Reset the unload workflow for this RV.
+                            t.UnloadComplete = false;
+                            UnloadDoorOpen = false;
+                            RestraintsReleased = false;
+                            UnloadAreaClear = false;
+                            GuestsUnloading = false;
+                            Telemetry.Log(SimTime, "OPS", $"Train {t.Id} arrived at Unload — awaiting door + restraints");
+                        }
+                        else
+                        {
+                            // Empty RV (e.g. a staged train's first lap): nothing to unload, so it passes
+                            // straight through Unload to the Load block. This is what frees the 2nd RV to
+                            // reach Load — without it an empty RV would wait forever for an unload it never needs.
+                            t.UnloadComplete = true;
+                            UnloadAreaClear = true;
+                            GuestsUnloading = false;
+                        }
                     }
+                    else
+                    {
+                        int riders = t.Unload(Config);
+                        if (riders > 0)
+                        {
+                            Score.AddRiders(riders);
+                            Guests.RewardRiders(riders);
+                            Telemetry.Log(SimTime, "OPS", $"Train {t.Id} returned, {riders} riders served");
+                        }
+                    }
+                }
+            }
+
+            // Unload timer: once restraints are released, guests take UnloadSeconds to clear the area;
+            // then the RV is free to crawl to Load and the door may be closed.
+            if (GuestsUnloading)
+            {
+                _unloadTimer -= dt;
+                if (_unloadTimer <= 0f)
+                {
+                    GuestsUnloading = false;
+                    UnloadAreaClear = true;
+                    var rv = UnloadingTrain();
+                    if (rv != null) rv.UnloadComplete = true;
+                    Telemetry.Log(SimTime, "OPS", "Unload area clear");
                 }
             }
 
@@ -225,12 +376,58 @@ namespace ParkShift.Core
             }
         }
 
+        int FirstClearStagingBlock(int loadBlock)
+        {
+            for (int b = loadBlock + 1; b < Blocks.BlockCount; b++) if (Blocks.IsClear(b)) return b;
+            return Math.Min(loadBlock + 1, Blocks.BlockCount - 1); // degenerate: more trains than blocks (guarded in ctor)
+        }
+
+        /// <summary>The RV at the Load block that the operator boards and dispatches.
+        /// With a single-block station this is also the RV that is unloading.</summary>
         public TrainSim PlatformTrain()
         {
+            int lb = Config.LoadBlock;
             foreach (var t in Trains)
-                if (t.CurrentBlock == 0 && (t.State == TrainState.InStationLoading || t.State == TrainState.ReadyToDispatch || t.State == TrainState.InStationUnloading))
+                if (t.CurrentBlock == lb &&
+                    (t.State == TrainState.InStationLoading || t.State == TrainState.ReadyToDispatch
+                     || (lb == 0 && t.State == TrainState.InStationUnloading)))
                     return t;
             return null;
+        }
+
+        /// <summary>The RV currently dropping riders at the Unload block (split station only; else null).</summary>
+        public TrainSim UnloadingTrain()
+        {
+            if (!Config.SeparateLoadUnload) return null;
+            foreach (var t in Trains)
+                if (t.CurrentBlock == Config.UnloadBlock && t.State == TrainState.InStationUnloading) return t;
+            return null;
+        }
+
+        /// <summary>Room for another RV? Keeps one spare block so the N+1 buffer still holds.</summary>
+        public bool CanAddTrain()
+        {
+            if (_trains.Length >= Blocks.BlockCount - 1) return false;
+            for (int b = 0; b < Blocks.BlockCount; b++) if (Blocks.IsClear(b)) return true;
+            return false;
+        }
+
+        /// <summary>Add an RV at runtime (HMI "Add RV"). Stages it on a free block and returns it,
+        /// or null if there's no room. Fires OnTrainAdded so the visual layer can spawn its body.</summary>
+        public TrainSim AddTrain()
+        {
+            if (!CanAddTrain()) return null;
+            int loadBlock = Config.LoadBlock;
+            int start = FirstClearStagingBlock(loadBlock);
+            if (!Blocks.IsClear(start)) return null;
+            float park = Config.SeparateLoadUnload ? Config.StationParkProgress : 0f;
+            int id = _trains.Length;
+            var t = new TrainSim(id, Blocks, start, loadBlock, park);
+            Array.Resize(ref _trains, id + 1);
+            _trains[id] = t;
+            OnTrainAdded?.Invoke(t);
+            Telemetry.Log(SimTime, "OPS", $"RV {id} added to the circuit");
+            return t;
         }
     }
 }

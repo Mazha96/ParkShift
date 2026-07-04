@@ -85,7 +85,8 @@ namespace ParkShift.UI
             if (m == null || m.Sim == null) return;
             var s = m.Sim;
 
-            _role.text = $"ROLE: {(_roleCtl ? _roleCtl.Role.ToString().ToUpper() : "?")}  (Tab)";
+            _role.text = $"ROLE: {(_roleCtl ? _roleCtl.Role.ToString().ToUpper() : "?")}  (Tab)"
+                       + (m.AutoOpActive ? "\n<color=#7fd4ff>AUTO-OP COVERING THE BOOTH</color>" : "");
             _timer.text = $"{Mathf.FloorToInt(s.ShiftRemaining / 60f):0}:{Mathf.FloorToInt(s.ShiftRemaining % 60f):00}";
             _score.text = $"SCORE {s.Score.Compute(s.Guests.Satisfaction)}  |  RIDERS {s.Score.RidersServed}";
             _satisfaction.text = $"GUEST SATISFACTION {s.Guests.Satisfaction:0}%   QUEUE {s.Guests.QueueCount}";

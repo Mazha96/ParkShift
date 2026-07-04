@@ -1,11 +1,16 @@
 using System.IO;
+using System.Collections.Generic;
 using UnityEngine;
 using ParkShift.Core;
+using ParkShift.Vehicles;
+using ParkShift.Guests;
 
 namespace ParkShift.Attraction
 {
     public enum OpVerb { OpenShift, ToggleGates, CycleGates, LoadTrain, VerifyRestraints, Dispatch,
-                         InspectSeat, ClearItem, ToggleLoto, MaintenanceReset, CallAssistant }
+                         InspectSeat, ClearItem, ToggleLoto, MaintenanceReset, CallAssistant,
+                         EscortIntruder, InspectCollision, WinchTrain,
+                         OpenUnloadDoor, CloseUnloadDoor, ReleaseRestraints }
 
     /// <summary>
     /// Unity bridge for the engine-agnostic AttractionSim.
@@ -17,8 +22,35 @@ namespace ParkShift.Attraction
         public static AttractionManager Instance { get; private set; }
 
         public AttractionSim Sim { get; private set; }
+        public AutoOperator AutoOp { get; private set; }
+        /// <summary>True while the auto-operator is covering the booth (player is Technician, solo).</summary>
+        public bool AutoOpActive => AutoOp != null && AutoOp.Enabled;
         public bool IsAuthoritative { get; set; } = true; // solo & host = true; FishNet client = false
         public System.Func<OpVerb, bool> VerbRouter;       // set by AttractionNetSync on clients
+
+        [Header("Config")]
+        [Tooltip("Optional designer config asset. When assigned it drives block count, RV count and motion feel " +
+                 "(e.g. the 6-block testbed). Leave empty to keep the built-in 4-block / 2-RV defaults.")]
+        public SimConfigSO ConfigAsset;
+
+        [Header("Station (built-in path only)")]
+        [Tooltip("Two-position station: block 0 = Unload, block 1 = Load, so two RVs park at once.")]
+        public bool SeparateLoadUnload = false;
+        [Tooltip("Number of RVs when using the built-in config (no asset).")]
+        public int RvCount = 2;
+
+        [Header("Runtime RV spawning (HMI 'Add RV')")]
+        [Tooltip("CoasterTrain prefab instantiated when an RV is added at runtime.")]
+        public GameObject RvPrefab;
+        [Tooltip("The spline the spawned RV follows.")]
+        public TrackPath Track;
+        [Tooltip("Optional accent material applied to added RVs (matches PS_TrainBody).")]
+        public Material AddedRvMaterial;
+        [Tooltip("Guest visual manager, so the new RV's seats/unload are handled.")]
+        public GuestVisualManager GuestVisuals;
+
+        /// <summary>Player-facing 'Add RV' (HMI). Returns false if there's no room.</summary>
+        public bool AddRv() => Sim != null && Sim.AddTrain() != null;
 
         [Header("Assistant (solo helper)")]
         public float AssistantPenalty = 30;
@@ -28,15 +60,95 @@ namespace ParkShift.Attraction
         void Awake()
         {
             Instance = this;
-            var cfg = Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo
-                ? SimConfig.Solo() : SimConfig.Coop(2);
+            SimConfig cfg;
+            if (ConfigAsset != null)
+            {
+                // Designer asset drives block layout, RV count and motion feel (e.g. the 6-block testbed).
+                cfg = ConfigAsset.ToConfig();
+            }
+            else
+            {
+                cfg = Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo
+                    ? SimConfig.Solo() : SimConfig.Coop(2);
+                cfg.SeparateLoadUnload = SeparateLoadUnload;
+                cfg.TrainCount = Mathf.Max(1, RvCount);
+                // Feel: slow station(s), fast launch, full course, slow brake run.
+                cfg.BlockSpeedMultipliers = SeparateLoadUnload
+                    ? new[] { 1f, 1f, 1.7f, 1.15f, 0.6f }   // Unload, Load, Launch, Course, Brake
+                    : new[] { 1f, 1.7f, 1.15f, 0.6f };
+            }
+            // Keep the sim's block count locked to the scene's track so the RVs never map onto the
+            // wrong segments (which would make them overlap). The track is the single source of truth.
+            var track = Object.FindObjectOfType<Vehicles.TrackPath>();
+            if (track != null) cfg.BlockCount = track.EffectiveBlockCount;
+
             Sim = new AttractionSim(cfg);
+            AutoOp = new AutoOperator(Sim);
             Sim.Telemetry.OnEntry += e => Debug.Log("[TELEMETRY] " + e);
+            if (Track == null) Track = track;
+            Sim.OnTrainAdded += SpawnTrainVisual;   // spawn a body when an RV is added from the HMI
+        }
+
+        /// <summary>Instantiate a visual body for an RV added at runtime and hook it into the guest system.</summary>
+        void SpawnTrainVisual(Core.TrainSim t)
+        {
+            if (RvPrefab == null || Track == null)
+            {
+                Debug.LogWarning("[AttractionManager] Added RV " + t.Id + " but no RvPrefab/Track set — visual not spawned.");
+                return;
+            }
+            var wrapper = new GameObject("Train" + t.Id);
+            var inst = Instantiate(RvPrefab);
+            inst.name = "Train" + t.Id + "_Model";
+            inst.transform.SetParent(wrapper.transform, false); // preserve the prefab's import pose
+
+            var seats = new Transform[8];
+            for (int s = 0; s < 8; s++) seats[s] = FindDeep(wrapper.transform, "Seat" + s);
+
+            var bars = new List<Transform>();
+            for (int b = 0; b < 4; b++) { var bar = FindDeep(wrapper.transform, "RestraintBar" + b); if (bar != null) bars.Add(bar); }
+            var rd = wrapper.AddComponent<TrainRestraintDriver>();
+            rd.TrainId = t.Id; rd.Bars = bars.ToArray();
+
+            if (AddedRvMaterial != null) SwapMaterial(wrapper, "PS_TrainBody", AddedRvMaterial);
+
+            var tv = wrapper.AddComponent<TrainVisual>();
+            tv.TrainId = t.Id; tv.Path = Track; tv.SeatAnchors = seats;
+
+            if (GuestVisuals != null) GuestVisuals.RegisterTrain(tv);
+        }
+
+        static Transform FindDeep(Transform root, string name)
+        {
+            if (root.name == name) return root;
+            foreach (Transform c in root) { var r = FindDeep(c, name); if (r != null) return r; }
+            return null;
+        }
+
+        static void SwapMaterial(GameObject go, string contains, Material replacement)
+        {
+            foreach (var r in go.GetComponentsInChildren<Renderer>())
+            {
+                var mats = r.sharedMaterials; bool dirty = false;
+                for (int k = 0; k < mats.Length; k++)
+                    if (mats[k] != null && mats[k].name.Contains(contains)) { mats[k] = replacement; dirty = true; }
+                if (dirty) r.sharedMaterials = mats;
+            }
         }
 
         void Update()
         {
             if (!IsAuthoritative || Sim == null) return;
+
+            // Solo: while the player wears the Technician hat, an auto-operator covers
+            // the booth (keeps dispatching) and major incidents start rolling for the tech.
+            bool techCover = Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo
+                          && Player.RoleController.Local != null
+                          && Player.RoleController.Local.Role == PlayerRole.Technician;
+            AutoOp.Enabled = techCover;
+            Sim.Faults.TechScenarioMode = techCover;
+            AutoOp.Tick(Time.deltaTime);
+
             Sim.Tick(Time.deltaTime);
 
             if (_assistantTimer > 0f)
@@ -69,6 +181,12 @@ namespace ParkShift.Attraction
                 case OpVerb.ClearItem: Sim.ClearDroppedItem(); return true;
                 case OpVerb.ToggleLoto: Sim.EngageLoto(!Sim.LotoEngaged); return true;
                 case OpVerb.MaintenanceReset: return Sim.MaintenanceReset();
+                case OpVerb.EscortIntruder: return Sim.EscortIntruder();
+                case OpVerb.InspectCollision: return Sim.InspectCollision();
+                case OpVerb.WinchTrain: return Sim.WinchValleyedTrain();
+                case OpVerb.OpenUnloadDoor: return Sim.OpenUnloadDoor();
+                case OpVerb.CloseUnloadDoor: return Sim.CloseUnloadDoor();
+                case OpVerb.ReleaseRestraints: return Sim.ReleaseRestraints();
                 case OpVerb.CallAssistant:
                     if (_assistantTimer <= 0f && Sim.Faults.Active.Count > 0)
                     {

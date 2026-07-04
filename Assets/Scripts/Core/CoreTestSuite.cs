@@ -96,6 +96,87 @@ namespace ParkShift.Core.Testing
             Check(!sim.Faults.HasFault(FaultType.BlockOccupiedStacking), "stacking fault auto-clears");
         }
 
+        public static void Test_SeparateLoadUnload()
+        {
+            _current = nameof(Test_SeparateLoadUnload);
+            var sim = NewSim(c => { c.SeparateLoadUnload = true; c.BlockCount = 5; });
+
+            Check(sim.Config.UnloadBlock == 0 && sim.Config.LoadBlock == 1, "split station block indices");
+            var plat = sim.PlatformTrain();
+            Check(plat != null && plat.CurrentBlock == 1, "boarding RV parks at the Load block (1)");
+
+            bool arrivedUnload = false;
+            foreach (var t in sim.Trains) t.OnArrivedStation += tr => { if (tr.CurrentBlock == 0) arrivedUnload = true; };
+
+            // Simple operator: board, verify and dispatch the Load-block RV whenever it is ready.
+            bool overlap = false;
+            var seen = new System.Collections.Generic.HashSet<int>();
+            for (int i = 0; i < 4000; i++)
+            {
+                var p = sim.PlatformTrain();
+                if (p != null && p.State == TrainState.InStationLoading)
+                {
+                    if (p.Riders == 0) p.Board(sim.Config.SeatsPerTrain);
+                    sim.SetGates(false);
+                    sim.VerifyRestraints();
+                }
+                if (sim.CanDispatch(out _)) sim.Dispatch();
+                sim.Tick(0.1f);
+
+                seen.Clear();
+                foreach (var t in sim.Trains) if (!seen.Add(t.CurrentBlock)) overlap = true; // one RV per block
+            }
+            Check(!overlap, "two RVs never share a block (no overlap)");
+            Check(arrivedUnload, "an RV completed a circuit and dropped riders at Unload (block 0)");
+        }
+
+        public static void Test_UnloadWorkflow()
+        {
+            _current = nameof(Test_UnloadWorkflow);
+            var sim = NewSim(c => { c.SeparateLoadUnload = true; c.BlockCount = 5; c.TrainCount = 1; c.UnloadSeconds = 1f; });
+            var rv = sim.Trains[0];
+
+            // Board + verify + dispatch the Load RV, then let it circuit back to Unload.
+            rv.Board(sim.Config.SeatsPerTrain);
+            sim.SetGates(false);
+            sim.VerifyRestraints();
+            Check(sim.Dispatch(), "dispatch load RV");
+            RunUntil(sim, () => rv.CurrentBlock == 0 && rv.State == TrainState.InStationUnloading, 90f);
+            Check(rv.CurrentBlock == 0 && rv.State == TrainState.InStationUnloading, "RV returns to Unload");
+            Check(rv.Riders > 0, "guests stay aboard until restraints released");
+
+            Check(!sim.ReleaseRestraints(), "release blocked while the door is closed");
+            Check(sim.OpenUnloadDoor(), "operator opens the unload door");
+            Check(sim.ReleaseRestraints(), "operator releases restraints");
+            Check(rv.Riders == 0, "riders drop on release");
+            Check(!sim.CloseUnloadDoor(), "door cannot close mid-unload");
+
+            RunUntil(sim, () => sim.UnloadAreaClear, 5f);
+            Check(sim.UnloadAreaClear, "unload area clears after the unload time");
+            Check(sim.CloseUnloadDoor(), "door closes once guests have cleared");
+
+            RunUntil(sim, () => rv.CurrentBlock == 1, 30f);
+            Check(rv.CurrentBlock == 1, "RV crawls Unload -> Load once clear");
+        }
+
+        public static void Test_AddTrain()
+        {
+            _current = nameof(Test_AddTrain);
+            var sim = NewSim(c => { c.SeparateLoadUnload = true; c.BlockCount = 5; c.TrainCount = 2; });
+            Check(sim.Trains.Length == 2, "starts with 2 RVs");
+            var added = sim.AddTrain();
+            Check(added != null && sim.Trains.Length == 3, "AddTrain grows the fleet");
+
+            var seen = new System.Collections.Generic.HashSet<int>();
+            bool overlap = false;
+            foreach (var t in sim.Trains) if (!seen.Add(t.CurrentBlock)) overlap = true;
+            Check(!overlap, "added RV placed on a free block (no overlap)");
+
+            int guard = 0;
+            while (sim.AddTrain() != null && guard++ < 10) { }
+            Check(sim.Trains.Length <= sim.Blocks.BlockCount - 1, "respects N+1 capacity (BlockCount-1)");
+        }
+
         public static void Test_FaultTriggerAndResolution()
         {
             _current = nameof(Test_FaultTriggerAndResolution);
@@ -169,7 +250,8 @@ namespace ParkShift.Core.Testing
             var tests = new Action[]
             {
                 Test_StateTransitions, Test_BlockOccupancy, Test_DispatchRules,
-                Test_BlockHoldAndStacking, Test_FaultTriggerAndResolution,
+                Test_BlockHoldAndStacking, Test_SeparateLoadUnload, Test_UnloadWorkflow, Test_AddTrain,
+                Test_FaultTriggerAndResolution,
                 Test_DispatchTimeoutFault, Test_ScoreCalculation, Test_SoloTuning,
                 Test_FullShiftEndsAndTelemetry
             };

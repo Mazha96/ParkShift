@@ -10,7 +10,9 @@ namespace ParkShift.Attraction
     public class PanelInteractable : MonoBehaviour, IInteractable
     {
         public enum Kind { ShiftStart, GateLever, LoadHelper, RestraintCheck, DispatchButton,
-                           SeatInspect, DroppedItem, LotoLever, MaintenancePanel, AssistantPhone }
+                           SeatInspect, DroppedItem, LotoLever, MaintenancePanel, AssistantPhone,
+                           IntruderEscort, CollisionInspect, WinchPanel,
+                           UnloadDoorOpen, UnloadDoorClose, ReleaseRestraints, HmiScreen }
         public Kind PanelKind;
 
         AttractionManager M => AttractionManager.Instance;
@@ -53,6 +55,29 @@ namespace ParkShift.Attraction
                 case Kind.AssistantPhone:
                     return S.Faults.Active.Count > 0 && M.AssistantRemaining <= 0f
                         ? "Call remote tech (auto-fix, score penalty)" : null;
+                case Kind.IntruderEscort:
+                    if (!S.Faults.HasFault(FaultType.TrackIntrusion)) return null;
+                    return role.CanUseMaintenance ? "Escort guest off the track"
+                                                  : "Guest on track (Technician only — Tab)";
+                case Kind.CollisionInspect:
+                    if (!S.Faults.HasFault(FaultType.TrainCollision)) return null;
+                    return role.CanUseMaintenance ? "Inspect collision contact point"
+                                                  : "Collision (Technician only — Tab)";
+                case Kind.WinchPanel:
+                    if (!S.Faults.HasFault(FaultType.TrainValleyed)) return null;
+                    if (!role.CanUseMaintenance) return "Evac winch (Technician only — Tab)";
+                    return S.LotoEngaged ? "Crank evac winch" : "Winch refused — engage LOTO first";
+                case Kind.UnloadDoorOpen:
+                    if (S.UnloadingTrain() == null) return null;
+                    return S.UnloadDoorOpen ? null : "Open unload door";
+                case Kind.UnloadDoorClose:
+                    if (!S.UnloadDoorOpen) return null;
+                    return S.UnloadAreaClear ? "Close unload door" : "Close door — wait for guests to clear";
+                case Kind.ReleaseRestraints:
+                    if (S.UnloadingTrain() == null || S.RestraintsReleased) return null;
+                    return S.UnloadDoorOpen ? "Release restraints" : "Release restraints — open the door first";
+                case Kind.HmiScreen:
+                    return UI.HmiPanel.IsOpen ? "Close HMI" : "Read ride HMI / add RVs";
             }
             return null;
         }
@@ -74,6 +99,13 @@ namespace ParkShift.Attraction
                 case Kind.LotoLever: if (role.CanUseMaintenance) M.Submit(OpVerb.ToggleLoto); break;
                 case Kind.MaintenancePanel: if (role.CanUseMaintenance) M.Submit(OpVerb.MaintenanceReset); break;
                 case Kind.AssistantPhone: M.Submit(OpVerb.CallAssistant); break;
+                case Kind.IntruderEscort: if (role.CanUseMaintenance) M.Submit(OpVerb.EscortIntruder); break;
+                case Kind.CollisionInspect: if (role.CanUseMaintenance) M.Submit(OpVerb.InspectCollision); break;
+                case Kind.WinchPanel: if (role.CanUseMaintenance) M.Submit(OpVerb.WinchTrain); break;
+                case Kind.UnloadDoorOpen: M.Submit(OpVerb.OpenUnloadDoor); break;
+                case Kind.UnloadDoorClose: M.Submit(OpVerb.CloseUnloadDoor); break;
+                case Kind.ReleaseRestraints: M.Submit(OpVerb.ReleaseRestraints); break;
+                case Kind.HmiScreen: UI.HmiPanel.Toggle(); break;   // client-side UI, not a sim verb
             }
         }
     }
