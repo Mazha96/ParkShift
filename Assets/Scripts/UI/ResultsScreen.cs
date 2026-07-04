@@ -53,6 +53,8 @@ namespace ParkShift.UI
                 $"Riders served: {sim.Score.RidersServed}\n" +
                 $"Dispatches: {sim.Score.Dispatches}\n" +
                 $"Faults resolved: {sim.Score.FaultsResolved}\n" +
+                $"Best dispatch streak: x{sim.Score.BestStreak}\n" +
+                $"Combo bonus: +{sim.Score.ComboBonusPoints}\n" +
                 $"Downtime: {sim.Score.DowntimeSeconds:0.0}s\n" +
                 $"Final satisfaction: {sim.Guests.Satisfaction:0}%\n\n" +
                 $"SCORE: {score}\n{sim.Score.Grade(score)}";

@@ -7,10 +7,16 @@ using ParkShift.Guests;
 
 namespace ParkShift.Attraction
 {
+    // NOTE: verbs are replicated as their int value (AttractionNetSync casts to/from int),
+    // so only ever APPEND here — never reorder or remove.
     public enum OpVerb { OpenShift, ToggleGates, CycleGates, LoadTrain, VerifyRestraints, Dispatch,
                          InspectSeat, ClearItem, ToggleLoto, MaintenanceReset, CallAssistant,
                          EscortIntruder, InspectCollision, WinchTrain,
-                         OpenUnloadDoor, CloseUnloadDoor, ReleaseRestraints }
+                         OpenUnloadDoor, CloseUnloadDoor, ReleaseRestraints,
+                         // Extended fault catalog (Wave 1). UnjamCar0..3 are one verb per car so
+                         // the verb funnel stays a plain enum (network-safe, no payload needed).
+                         VerifyBlockClear, ResetBlockSensor, AdvanceBrownoutStage,
+                         UnjamCar0, UnjamCar1, UnjamCar2, UnjamCar3 }
 
     /// <summary>
     /// Unity bridge for the engine-agnostic AttractionSim.
@@ -38,6 +44,15 @@ namespace ParkShift.Attraction
         public bool SeparateLoadUnload = false;
         [Tooltip("Number of RVs when using the built-in config (no asset).")]
         public int RvCount = 2;
+
+        [Header("Escalated shift (scene preset)")]
+        [Tooltip("Layers the Wave-1 content onto whatever config is in use: extended fault catalog, " +
+                 "fault/arrival ramps and guest surge waves. Applied here (Unity layer) so the Core " +
+                 "defaults stay behavior-preserving for the headless tests.")]
+        public bool EscalatedShift = false;
+        public float FaultRampMultiplier = 2f;
+        public float GuestArrivalRampMultiplier = 1.75f;
+        public bool SurgeWavesEnabled = true;
 
         [Header("Runtime RV spawning (HMI 'Add RV')")]
         [Tooltip("CoasterTrain prefab instantiated when an RV is added at runtime.")]
@@ -76,6 +91,13 @@ namespace ParkShift.Attraction
                 cfg.BlockSpeedMultipliers = SeparateLoadUnload
                     ? new[] { 1f, 1f, 1.7f, 1.15f, 0.6f }   // Unload, Load, Launch, Course, Brake
                     : new[] { 1f, 1.7f, 1.15f, 0.6f };
+            }
+            if (EscalatedShift)
+            {
+                cfg.ExtendedFaultsEnabled = true;
+                cfg.FaultRampMultiplier = FaultRampMultiplier;
+                cfg.GuestArrivalRampMultiplier = GuestArrivalRampMultiplier;
+                cfg.SurgeWavesEnabled = SurgeWavesEnabled;
             }
             // Keep the sim's block count locked to the scene's track so the RVs never map onto the
             // wrong segments (which would make them overlap). The track is the single source of truth.
@@ -187,6 +209,13 @@ namespace ParkShift.Attraction
                 case OpVerb.OpenUnloadDoor: return Sim.OpenUnloadDoor();
                 case OpVerb.CloseUnloadDoor: return Sim.CloseUnloadDoor();
                 case OpVerb.ReleaseRestraints: return Sim.ReleaseRestraints();
+                case OpVerb.VerifyBlockClear: return Sim.VerifyBlockClear();
+                case OpVerb.ResetBlockSensor: return Sim.ResetBlockSensor();
+                case OpVerb.AdvanceBrownoutStage: return Sim.AdvanceBrownoutStage();
+                case OpVerb.UnjamCar0: return Sim.UnjamRestraint(0);
+                case OpVerb.UnjamCar1: return Sim.UnjamRestraint(1);
+                case OpVerb.UnjamCar2: return Sim.UnjamRestraint(2);
+                case OpVerb.UnjamCar3: return Sim.UnjamRestraint(3);
                 case OpVerb.CallAssistant:
                     if (_assistantTimer <= 0f && Sim.Faults.Active.Count > 0)
                     {

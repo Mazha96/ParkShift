@@ -47,7 +47,7 @@ Everything is fictional. No real parks, rides, or procedures.
 ## Testing
 
 **In Unity:** Window → General → Test Runner → EditMode → Run All
-(9 tests in `Assets/Tests/EditMode/CoreSystemTests.cs`).
+(`Assets/Tests/EditMode/CoreSystemTests.cs` wraps the shared core suite).
 
 **Without Unity (CI/headless):** the simulation core is pure C# with zero
 engine references, so it runs anywhere:
@@ -58,14 +58,15 @@ mkdir -p /tmp/coretest && cd /tmp/coretest
 # Program.cs / Playtest.cs shipped under Tools/CoreTestHarness in this repo
 mcs -langversion:7.2 -out:coretest.exe \
     Tools/CoreTestHarness/*.cs Assets/Scripts/Core/*.cs
-mono coretest.exe   # runs all 9 tests + a scripted 180s bot playtest
+mono coretest.exe   # runs all 17 tests + a scripted 180s bot playtest
 ```
 
 ## Architecture (the 60-second tour)
 
 - `Assets/Scripts/Core/` — **engine-agnostic simulation** (`noEngineReferences: true`):
-  state machine, block zones, two-train sim, guest queue, 6-fault catalog,
-  scoring, telemetry. This is the single source of truth and what the tests cover.
+  state machine, block zones, two-train sim, guest queue, 12-fault catalog,
+  scoring (with dispatch-streak combos), telemetry. This is the single source of
+  truth and what the tests cover.
 - `Assets/Scripts/Attraction/AttractionManager.cs` — Unity bridge. Ticks the sim
   when authoritative (solo/host). Every player verb funnels through
   `Submit(OpVerb)` so multiplayer can intercept.
@@ -78,7 +79,7 @@ mono coretest.exe   # runs all 9 tests + a scripted 180s bot playtest
 - Telemetry writes to `Application.persistentDataPath/parkshift_telemetry.txt`
   on scene exit and mirrors to the Console live.
 
-## The 9 faults
+## The 12 faults
 
 | Fault | Trigger | Consequence | Fix |
 |---|---|---|---|
@@ -91,6 +92,20 @@ mono coretest.exe   # runs all 9 tests + a scripted 180s bot playtest
 | Track Intrusion | tech mode (major) | **e-stop** | Tech: walk to the track, escort the guest off |
 | Train Collision | tech mode (major) | **ride stops** | Tech: inspect contact point → LOTO → drive reset → release |
 | Train Valleyed | tech mode (major) | **ride stops** | Tech: LOTO → crank EVAC WINCH out on the course → release |
+| Block Sensor Ghost | random (escalated) | dispatch hold | hike to the **ZONE SENSOR** post by the launch, verify the block on foot, then **SENSOR RESET** at the booth |
+| Power Brownout | random (escalated, major) | **ride stops** | Tech: energize all 3 bus stages in order at the drive cabinet's **BUS STAGE** button |
+| Restraint Jammed Car | random (escalated) | dispatch hold | read the HMI for the flagged car, free its lap bar at the matching **CAR 1–4** check point, re-verify |
+
+The last three roll only on an **escalated shift** — `PrototypeAttraction` ships
+with the `AttractionManager`'s *Escalated Shift* preset on (extended fault
+catalog, fault/arrival ramps toward shift end, guest surge waves). Untick it in
+the inspector for the legacy calm shift; headless Core defaults are unchanged.
+
+## Scoring: dispatch streaks
+
+Consecutive dispatches without a fault build a **streak** (live on the HMI);
+each fault breaks it. Streaks pay **combo bonus points** into the final score,
+and the results screen reports your best streak and total combo bonus.
 
 ## Props
 
@@ -112,13 +127,19 @@ the `Queue` object's `GuestVisualManager`: `GuestScale`, `MoveSpeed`, `SitOffset
 
 ## Graphics
 
-Materials are PBR-textured from `Assets/Textures/{set}_albedo.png` + `{set}_normal.png`
-(sets: `concrete`, `asphalt`, `metal`, `paint`, `seat`, `wood`). The bundled textures are
-procedurally generated; to upgrade, download any CC0 texture pack (e.g. from
-**ambientcg.com** or **polyhaven.com**), rename the color map to `{set}_albedo.png` and
-the normal map to `{set}_normal.png`, drop them in `Assets/Textures/`, and re-run
-**ParkShift → Build All Scenes**. Bloom/ACES/vignette/AO post-processing activates
-automatically once the `com.unity.postprocessing` package resolves (already in the manifest).
+The look is a stylized flat-color low-poly park at **cosmic dusk**: a custom gradient
+space skybox (procedural stars + planet, `Assets/Shaders/GradientSkybox.shader`), warm
+low sun, violet trilight ambient + fog, neon trim (`NeonPulse`), procedural coaster track
+(twin rails, ties, spine, supports, brake fins, drive tires — `TrackMeshBuilder`), and
+park dressing (trees, rocks, crystals, lamps, string lights, horizon hills) all generated
+by the scene builder. Materials are flat-tinted Standard-shader assets in
+`Assets/Materials/` — the scene builder no longer assigns texture sets, so retexturing
+means editing the palette block at the top of `BuildPrototypeAttraction()` in
+`SceneBuilder.cs` and re-running **ParkShift → Build All Scenes**. (The old
+`Assets/Textures/{set}_albedo/_normal.png` swap workflow is retired; `Mat()` still
+accepts a texSet string if you want textured PBR back.) Bloom/ACES/vignette/AO
+post-processing activates automatically once the `com.unity.postprocessing` package
+resolves (already in the manifest).
 
 ## Technician mode (solo)
 

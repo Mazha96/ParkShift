@@ -63,6 +63,7 @@ namespace ParkShift.UI
             sb.AppendLine("STATUS:  " + s.State + (s.LotoEngaged ? "   [LOTO ENGAGED]" : ""));
             sb.AppendLine("RVs in service:  " + s.Trains.Length + (s.CanAddTrain() ? "" : "   (at capacity)"));
             sb.AppendLine("Riders served:  " + s.Score.RidersServed + "      Queue:  " + s.Guests.QueueCount);
+            sb.AppendLine("Streak:  x" + s.Score.CurrentStreak + "      Best:  x" + s.Score.BestStreak);
             sb.AppendLine("Guest satisfaction:  " + Mathf.RoundToInt(s.Guests.Satisfaction) + "%");
             sb.AppendLine();
             if (s.Faults.Active.Count == 0)
@@ -71,7 +72,7 @@ namespace ParkShift.UI
             {
                 sb.AppendLine("ACTIVE FAULTS:");
                 foreach (var f in s.Faults.Active)
-                    sb.AppendLine("  • " + f.Def.HmiMessage + "\n        FIX: " + f.Def.FixHint);
+                    sb.AppendLine("  • " + f.HmiText + "\n        FIX: " + f.Def.FixHint);
             }
             _status.text = sb.ToString();
         }

@@ -26,6 +26,12 @@ static class Playtest
                         if (!sim.LotoEngaged) sim.EngageLoto(true);
                         else { sim.MaintenanceReset(); sim.EngageLoto(false); }
                         break;
+                    // Extended-catalog faults (inert on default config — pool is unchanged there)
+                    case FaultType.BlockSensorGhost:
+                        if (!f.Inspected) sim.VerifyBlockClear(); else sim.ResetBlockSensor();
+                        break;
+                    case FaultType.RestraintJammedCar: sim.UnjamRestraint(f.TargetIndex); break;
+                    case FaultType.PowerBrownout: sim.AdvanceBrownoutStage(); break;
                 }
             }
             var p = sim.PlatformTrain();
@@ -45,6 +51,8 @@ static class Playtest
         Console.WriteLine($"Riders served:   {sim.Score.RidersServed}");
         Console.WriteLine($"Dispatches:      {sim.Score.Dispatches}");
         Console.WriteLine($"Faults resolved: {sim.Score.FaultsResolved}");
+        Console.WriteLine($"Best streak:     x{sim.Score.BestStreak}");
+        Console.WriteLine($"Combo bonus:     +{sim.Score.ComboBonusPoints}");
         Console.WriteLine($"Downtime:        {sim.Score.DowntimeSeconds:0.0}s");
         Console.WriteLine($"Satisfaction:    {sim.Guests.Satisfaction:0.0}");
         Console.WriteLine($"SCORE: {score}  GRADE: {sim.Score.Grade(score)}");

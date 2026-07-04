@@ -24,6 +24,16 @@ namespace ParkShift.Core
         public float TriggeredAt;
         public bool LotoSatisfied;
         public bool Inspected;
+        /// <summary>Fault-specific target (e.g. the jammed car index). -1 when not applicable.</summary>
+        public int TargetIndex = -1;
+        /// <summary>Staged-fix progress (power brownout restart stages). 0 = not started.</summary>
+        public int Stage;
+        /// <summary>Sim time of the last accepted stage advance (staged fixes).</summary>
+        public float LastStageAt;
+        /// <summary>Optional instance-specific HMI text (e.g. names the jammed car).</summary>
+        public string Detail;
+        /// <summary>What the HMI should display for this instance (falls back to the catalog message).</summary>
+        public string HmiText { get { return Detail ?? Def.HmiMessage; } }
     }
 
     /// <summary>Generates and tracks faults. Random faults roll per second; condition faults
@@ -82,6 +92,23 @@ namespace ParkShift.Core
                 FixHint = "Technician: engage LOTO, crank the evac winch out on the course, release LOTO.",
                 BlocksDispatch = true, StopsRide = true, RequiresTechnician = true, RequiresLoto = true,
                 SatisfactionHit = 12f, ScorePenalty = 60 } },
+            { FaultType.BlockSensorGhost, new FaultDefinition {
+                Type = FaultType.BlockSensorGhost, Severity = FaultSeverity.Minor,
+                HmiMessage = "BLOCK SENSOR GHOST — PHANTOM OCCUPANCY, ZONE 2",
+                FixHint = "Walk the course to zone 2, visually confirm the block is clear, then reset the sensor at the dispatch panel.",
+                BlocksDispatch = true, RequiresInspection = true,
+                SatisfactionHit = 3f, ScorePenalty = 15 } },
+            { FaultType.PowerBrownout, new FaultDefinition {
+                Type = FaultType.PowerBrownout, Severity = FaultSeverity.Major,
+                HmiMessage = "POWER BROWNOUT — DRIVE BUS UNDERVOLT, STAGED RESTART REQUIRED",
+                FixHint = "Technician: staged restart at the drive cabinet — energize each of the 3 bus stages in order, letting each stabilize.",
+                BlocksDispatch = true, StopsRide = true, RequiresTechnician = true,
+                SatisfactionHit = 9f, ScorePenalty = 45 } },
+            { FaultType.RestraintJammedCar, new FaultDefinition {
+                Type = FaultType.RestraintJammedCar, Severity = FaultSeverity.Minor,
+                HmiMessage = "RESTRAINT JAM — LAP BAR NOT SEATING (SEE HMI FOR CAR)",
+                FixHint = "Walk the train, free the lap bar on the flagged car, then re-verify restraints.",
+                BlocksDispatch = true, SatisfactionHit = 3f, ScorePenalty = 15 } },
         };
 
         readonly List<ActiveFault> _active = new List<ActiveFault>();
@@ -95,6 +122,15 @@ namespace ParkShift.Core
         {
             FaultType.RestraintNotVerified, FaultType.GateSensorFault,
             FaultType.GuestDroppedItem, FaultType.MaintenanceResetRequired
+        };
+
+        /// <summary>Base pool plus the three extended faults — used only when
+        /// SimConfig.ExtendedFaultsEnabled so legacy runs keep the exact RNG stream.</summary>
+        static readonly FaultType[] ExtendedRandomPool =
+        {
+            FaultType.RestraintNotVerified, FaultType.GateSensorFault,
+            FaultType.GuestDroppedItem, FaultType.MaintenanceResetRequired,
+            FaultType.BlockSensorGhost, FaultType.RestraintJammedCar, FaultType.PowerBrownout
         };
 
         /// <summary>Major incidents rolled only while an auto-operator runs the booth
@@ -120,9 +156,19 @@ namespace ParkShift.Core
 
         public void Tick(float dt, float simTime)
         {
-            if (_rng.NextDouble() < _cfg.RandomFaultChancePerSecond * dt && _active.Count < 2)
+            // Escalation ramp: chance scales linearly toward base*FaultRampMultiplier at shift end.
+            // Guarded so the default (multiplier 1) leaves the legacy math byte-identical.
+            float chance = _cfg.RandomFaultChancePerSecond;
+            if (_cfg.FaultRampMultiplier != 1f && _cfg.ShiftLengthSeconds > 0f)
             {
-                var t = RandomPool[_rng.Next(RandomPool.Length)];
+                float p = simTime >= _cfg.ShiftLengthSeconds ? 1f : simTime / _cfg.ShiftLengthSeconds;
+                if (p < 0f) p = 0f;
+                chance *= 1f + (_cfg.FaultRampMultiplier - 1f) * p;
+            }
+            if (_rng.NextDouble() < chance * dt && _active.Count < 2)
+            {
+                var pool = _cfg.ExtendedFaultsEnabled ? ExtendedRandomPool : RandomPool;
+                var t = pool[_rng.Next(pool.Length)];
                 Trigger(t, simTime);
             }
             // Technician scenario: one major incident at a time, on its own clock
@@ -140,10 +186,20 @@ namespace ParkShift.Core
             if (f != null) f.Inspected = true;
         }
 
+        /// <summary>The active instance of a fault type, or null.</summary>
+        public ActiveFault Find(FaultType type) => _active.Find(a => a.Def.Type == type);
+
         public ActiveFault Trigger(FaultType type, float simTime)
         {
             if (HasFault(type)) return null; // no duplicate stacking of same fault
             var af = new ActiveFault { Def = Catalog[type], TriggeredAt = simTime };
+            if (type == FaultType.RestraintJammedCar)
+            {
+                // Seeded pick of the jammed car. Only consumes RNG for this type, so the
+                // legacy stream is untouched unless the extended catalog is in play.
+                af.TargetIndex = _rng.Next(Math.Max(1, _cfg.CarsPerTrain));
+                af.Detail = string.Format("RESTRAINT JAM — CAR {0} LAP BAR NOT SEATING", af.TargetIndex + 1);
+            }
             _active.Add(af);
             OnFaultTriggered?.Invoke(af);
             return af;

@@ -244,6 +244,192 @@ namespace ParkShift.Core.Testing
             Check(sim.Telemetry.Entries.Count > 0, "telemetry recorded");
         }
 
+        // ---------------- Extended content tests ----------------
+
+        public static void Test_BlockSensorGhostFault()
+        {
+            _current = nameof(Test_BlockSensorGhostFault);
+            var sim = NewSim();
+            sim.Faults.Trigger(FaultType.BlockSensorGhost, 0);
+            Check(sim.Faults.AnyBlocksDispatch, "ghost occupancy holds dispatch");
+            Check(!sim.ResetBlockSensor(), "sensor reset refused before the block-verify walk");
+            Check(sim.Faults.HasFault(FaultType.BlockSensorGhost), "fault persists until walked");
+            Check(sim.VerifyBlockClear(), "block-verify walk performed");
+            Check(sim.ResetBlockSensor(), "sensor reset accepted after the walk");
+            Check(!sim.Faults.HasFault(FaultType.BlockSensorGhost), "phantom occupancy cleared");
+            Check(sim.State == AttractionState.Ready, "ride returns to Ready");
+        }
+
+        public static void Test_PowerBrownoutStagedRestart()
+        {
+            _current = nameof(Test_PowerBrownoutStagedRestart);
+            var sim = NewSim(c => c.BrownoutStageSeconds = 1f);
+            sim.Tick(0.1f);
+            sim.Faults.Trigger(FaultType.PowerBrownout, sim.SimTime);
+            Check(!sim.RidePowered, "brownout stops the ride");
+            Check(!sim.AdvanceBrownoutStage(), "stage refused before the bus stabilizes");
+            RunUntil(sim, () => false, 1.2f);
+            Check(sim.AdvanceBrownoutStage(), "stage 1 accepted after dwell");
+            Check(!sim.AdvanceBrownoutStage(), "stage 2 refused immediately (must stabilize)");
+            RunUntil(sim, () => false, 1.2f);
+            Check(sim.AdvanceBrownoutStage(), "stage 2 accepted");
+            RunUntil(sim, () => false, 1.2f);
+            Check(sim.AdvanceBrownoutStage(), "stage 3 accepted");
+            Check(!sim.Faults.HasFault(FaultType.PowerBrownout), "brownout resolves after the full staged restart");
+            Check(sim.RidePowered, "power restored");
+        }
+
+        public static void Test_RestraintJamTargetsCar()
+        {
+            _current = nameof(Test_RestraintJamTargetsCar);
+            var sim = NewSim(null, 77);
+            var f = sim.Faults.Trigger(FaultType.RestraintJammedCar, 0);
+            Check(f != null && f.TargetIndex >= 0 && f.TargetIndex < sim.Config.CarsPerTrain,
+                  "jam targets a specific car");
+            Check(f.HmiText.Contains("CAR " + (f.TargetIndex + 1)), "HMI text names the flagged car");
+            Check(sim.Faults.AnyBlocksDispatch, "jam holds dispatch");
+            int wrong = (f.TargetIndex + 1) % sim.Config.CarsPerTrain;
+            Check(!sim.UnjamRestraint(wrong), "wrong car refused");
+            Check(sim.Faults.HasFault(FaultType.RestraintJammedCar), "still jammed after wrong car");
+            Check(sim.UnjamRestraint(f.TargetIndex), "flagged car frees the bar");
+            Check(!sim.Faults.HasFault(FaultType.RestraintJammedCar), "jam cleared");
+            // Determinism: the same seed must flag the same car.
+            var sim2 = NewSim(null, 77);
+            var f2 = sim2.Faults.Trigger(FaultType.RestraintJammedCar, 0);
+            Check(f2 != null && f2.TargetIndex == f.TargetIndex, "seeded RNG reproduces the jammed car");
+        }
+
+        public static void Test_EscalationRampAndSurge()
+        {
+            _current = nameof(Test_EscalationRampAndSurge);
+            // Guest arrival ramp: a ramped config spawns more guests over the shift than a flat one.
+            var flatCfg = new SimConfig { RandomFaultChancePerSecond = 0f, QueueCapacity = 100000 };
+            var rampCfg = new SimConfig { RandomFaultChancePerSecond = 0f, QueueCapacity = 100000, GuestArrivalRampMultiplier = 3f };
+            var gFlat = new GuestSim(flatCfg); var gRamp = new GuestSim(rampCfg);
+            for (float t = 0f; t < 180f; t += 0.1f) { gFlat.Tick(0.1f, false, t); gRamp.Tick(0.1f, false, t); }
+            Check(gRamp.TotalSpawned > gFlat.TotalSpawned,
+                  $"ramped arrivals spawn more ({gRamp.TotalSpawned} vs {gFlat.TotalSpawned})");
+
+            // Default multiplier (1) must be behavior-preserving vs the legacy no-simTime path.
+            var gDefA = new GuestSim(new SimConfig { QueueCapacity = 100000 });
+            var gDefB = new GuestSim(new SimConfig { QueueCapacity = 100000 });
+            for (float t = 0f; t < 60f; t += 0.1f) { gDefA.Tick(0.1f, false, t); gDefB.Tick(0.1f, false); }
+            Check(gDefA.TotalSpawned == gDefB.TotalSpawned, "default ramp is behavior-preserving");
+
+            // Surge waves: deterministic time windows that boost arrivals.
+            var surgeCfg = new SimConfig { RandomFaultChancePerSecond = 0f, QueueCapacity = 100000,
+                SurgeWavesEnabled = true, SurgeWavePeriodSeconds = 20f,
+                SurgeWaveDurationSeconds = 5f, SurgeWaveSpawnMultiplier = 4f };
+            var gSurge = new GuestSim(surgeCfg);
+            var gCalm = new GuestSim(new SimConfig { QueueCapacity = 100000 });
+            bool surgeSeen = false, calmSeen = false;
+            for (float t = 0f; t < 40f; t += 0.1f)
+            {
+                gSurge.Tick(0.1f, false, t); gCalm.Tick(0.1f, false, t);
+                if (gSurge.SurgeActive) surgeSeen = true; else calmSeen = true;
+            }
+            Check(surgeSeen && calmSeen, "surge windows toggle on and off");
+            Check(gSurge.TotalSpawned > gCalm.TotalSpawned,
+                  $"surge waves add guests ({gSurge.TotalSpawned} vs {gCalm.TotalSpawned})");
+
+            // Fault ramp: same seed + same RNG stream, the ramped threshold is never lower — more faults roll.
+            Check(CountFaults(new SimConfig(), 9, 180f) < CountFaults(new SimConfig { FaultRampMultiplier = 6f }, 9, 180f),
+                  "fault ramp rolls more faults over the shift");
+
+            // Extended pool determinism: two seeded systems produce the identical fault sequence.
+            var seqA = FaultSequence(new SimConfig { ExtendedFaultsEnabled = true, RandomFaultChancePerSecond = 0.2f }, 5, 120f);
+            var seqB = FaultSequence(new SimConfig { ExtendedFaultsEnabled = true, RandomFaultChancePerSecond = 0.2f }, 5, 120f);
+            Check(seqA == seqB && seqA.Length > 0, "extended fault pool is seed-deterministic");
+        }
+
+        static int CountFaults(SimConfig cfg, int seed, float seconds)
+        {
+            var fs = new FaultSystem(cfg, seed);
+            int count = 0;
+            fs.OnFaultTriggered += f => count++;
+            for (float t = 0f; t < seconds; t += 0.1f)
+            {
+                fs.Tick(0.1f, t);
+                while (fs.Active.Count > 0)
+                {
+                    var a = fs.Active[0];
+                    fs.MarkLoto(a.Def.Type); fs.MarkInspected(a.Def.Type);
+                    fs.Resolve(a.Def.Type);
+                }
+            }
+            return count;
+        }
+
+        static string FaultSequence(SimConfig cfg, int seed, float seconds)
+        {
+            var fs = new FaultSystem(cfg, seed);
+            var sb = new System.Text.StringBuilder();
+            fs.OnFaultTriggered += f => sb.Append(f.Def.Type).Append(f.TargetIndex).Append(';');
+            for (float t = 0f; t < seconds; t += 0.1f)
+            {
+                fs.Tick(0.1f, t);
+                while (fs.Active.Count > 0)
+                {
+                    var a = fs.Active[0];
+                    fs.MarkLoto(a.Def.Type); fs.MarkInspected(a.Def.Type);
+                    fs.Resolve(a.Def.Type);
+                }
+            }
+            return sb.ToString();
+        }
+
+        public static void Test_ComboScoringAndSatisfaction()
+        {
+            _current = nameof(Test_ComboScoringAndSatisfaction);
+            // Pure score mechanics: streak counting, break, bonus feeding the total.
+            var s = new ScoreSystem();
+            s.AddDispatch(); s.AddDispatch(); s.AddDispatch();
+            Check(s.CurrentStreak == 3 && s.BestStreak == 3, "streak counts consecutive dispatches");
+            s.BreakStreak();
+            Check(s.CurrentStreak == 0 && s.BestStreak == 3, "break resets current, keeps best");
+            s.AddComboBonus(40);
+            Check(s.Compute(0f) == 40, "combo bonus feeds the score");
+
+            // Satisfaction recovery: a dispatch lifts the crowd's mood (checked away from the 100 cap).
+            var simSat = NewSim();
+            simSat.Guests.Penalize(20f);
+            simSat.SetGates(true);
+            RunUntil(simSat, () => simSat.Guests.QueueCount >= 2, 30f);
+            simSat.LoadPlatformTrain(); simSat.SetGates(false); simSat.VerifyRestraints();
+            float beforeSat = simSat.Guests.Satisfaction;
+            Check(simSat.Dispatch(), "dispatch for the satisfaction check");
+            Check(simSat.Guests.Satisfaction > beforeSat, "smooth dispatch recovers satisfaction");
+
+            // Sim level: fast clean circuits earn combo bonus; a fault breaks the streak.
+            var sim = NewSim(c => c.BlockTraverseSeconds = 0.5f);
+            int guard = 0;
+            while (sim.Score.Dispatches < 3 && guard++ < 4000)
+            {
+                var p = sim.PlatformTrain();
+                if (p != null && p.State == TrainState.InStationLoading)
+                {
+                    if (p.Riders == 0) p.Board(sim.Config.SeatsPerTrain);
+                    sim.SetGates(false);
+                    sim.VerifyRestraints();
+                }
+                if (sim.CanDispatch(out _)) sim.Dispatch();
+                sim.Tick(0.1f);
+            }
+            Check(sim.Score.Dispatches >= 3, "policy completed 3 dispatch cycles");
+            Check(sim.Score.CurrentStreak >= 3, "clean cycles build a streak");
+            Check(sim.Score.ComboBonusPoints > 0, "streak banks combo bonus points");
+            sim.Faults.Trigger(FaultType.GateSensorFault, sim.SimTime);
+            Check(sim.Score.CurrentStreak == 0, "fault breaks the streak");
+            Check(sim.Score.BestStreak >= 3, "best streak is kept for the results screen");
+
+            // Stalled platform drains satisfaction faster than the same shift without the stall drain.
+            var stall = NewSim(c => c.StallGraceSeconds = 2f);
+            var noStall = NewSim(c => { c.StallGraceSeconds = 2f; c.SatisfactionStallDrainPerSecond = 0f; });
+            for (int i = 0; i < 250; i++) { stall.Tick(0.1f); noStall.Tick(0.1f); }
+            Check(stall.Guests.Satisfaction < noStall.Guests.Satisfaction,
+                  "stalled platform drains satisfaction");
+        }
+
         public static int RunAll(Action<string> print)
         {
             Failures.Clear();
@@ -253,7 +439,9 @@ namespace ParkShift.Core.Testing
                 Test_BlockHoldAndStacking, Test_SeparateLoadUnload, Test_UnloadWorkflow, Test_AddTrain,
                 Test_FaultTriggerAndResolution,
                 Test_DispatchTimeoutFault, Test_ScoreCalculation, Test_SoloTuning,
-                Test_FullShiftEndsAndTelemetry
+                Test_FullShiftEndsAndTelemetry,
+                Test_BlockSensorGhostFault, Test_PowerBrownoutStagedRestart, Test_RestraintJamTargetsCar,
+                Test_EscalationRampAndSurge, Test_ComboScoringAndSatisfaction
             };
             foreach (var t in tests) { t(); print($"  ran {t.Method.Name}"); }
             if (Failures.Count == 0) { print($"ALL {tests.Length} TESTS PASSED"); return 0; }

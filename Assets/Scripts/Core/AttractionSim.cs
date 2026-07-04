@@ -76,6 +76,7 @@ namespace ParkShift.Core
             {
                 Guests.Penalize(f.Def.SatisfactionHit);
                 Score.AddPenalty(f.Def.ScorePenalty);
+                Score.BreakStreak();   // a fault interrupts smooth operation — the dispatch combo resets
                 Telemetry.Log(SimTime, "FAULT", $"TRIGGERED {f.Def.Type}: {f.Def.HmiMessage}");
                 SetState(AttractionState.Faulted);
             };
@@ -221,6 +222,15 @@ namespace ParkShift.Core
             var t = PlatformTrain();
             t.Dispatch();
             Score.AddDispatch();
+            // Dispatch streak combo: consecutive clean dispatches (no fault in between) bank bonus points.
+            int streak = Score.CurrentStreak;
+            if (streak >= 2 && Config.ComboBonusPerStreak > 0)
+            {
+                int bonus = Math.Min(streak - 1, Config.ComboStreakCap) * Config.ComboBonusPerStreak;
+                Score.AddComboBonus(bonus);
+                Telemetry.Log(SimTime, "SCORE", $"Dispatch streak x{streak} (+{bonus} combo)");
+            }
+            Guests.RewardDispatch(Config.SatisfactionPerSmoothDispatch);
             _timeoutFaultLatched = false;
             Telemetry.Log(SimTime, "OPS", $"DISPATCH train {t.Id} with {t.Riders} riders");
             return true;
@@ -283,6 +293,71 @@ namespace ParkShift.Core
             return ok;
         }
 
+        // ---- Extended fault fix verbs ----
+
+        /// <summary>Block-verify walk: the operator goes out to the ghosting zone sensor and
+        /// visually confirms the block is clear (the inspection step of a BlockSensorGhost fix).</summary>
+        public bool VerifyBlockClear()
+        {
+            if (!Faults.HasFault(FaultType.BlockSensorGhost)) return false;
+            Faults.MarkInspected(FaultType.BlockSensorGhost);
+            Telemetry.Log(SimTime, "OPS", "Block walked — zone visually confirmed clear");
+            return true;
+        }
+
+        /// <summary>Reset the ghosting zone sensor at the dispatch panel.
+        /// Refused until the block-verify walk has been done.</summary>
+        public bool ResetBlockSensor()
+        {
+            if (!Faults.HasFault(FaultType.BlockSensorGhost)) return false;
+            bool ok = Faults.Resolve(FaultType.BlockSensorGhost);
+            Telemetry.Log(SimTime, "OPS", ok ? "Zone sensor reset — phantom occupancy cleared"
+                                             : "Sensor reset refused — verify the block on foot first");
+            return ok;
+        }
+
+        /// <summary>Technician advances one stage of the brownout staged restart. Each stage must
+        /// stabilize for Config.BrownoutStageSeconds before the next press is accepted.</summary>
+        public bool AdvanceBrownoutStage()
+        {
+            var f = Faults.Find(FaultType.PowerBrownout);
+            if (f == null) return false;
+            float since = SimTime - (f.Stage == 0 ? f.TriggeredAt : f.LastStageAt);
+            if (since < Config.BrownoutStageSeconds)
+            {
+                Telemetry.Log(SimTime, "MAINT",
+                    $"Restart stage refused — bus still stabilizing ({Config.BrownoutStageSeconds - since:0.0}s to go)");
+                return false;
+            }
+            f.Stage++;
+            f.LastStageAt = SimTime;
+            if (f.Stage >= Config.BrownoutStageCount)
+            {
+                Faults.Resolve(FaultType.PowerBrownout);
+                Telemetry.Log(SimTime, "MAINT", "Drive bus restart complete — power restored");
+            }
+            else
+                Telemetry.Log(SimTime, "MAINT", $"Restart stage {f.Stage}/{Config.BrownoutStageCount} energized");
+            return true;
+        }
+
+        /// <summary>Free a jammed lap bar on a specific car. Only the flagged car clears the fault;
+        /// afterwards restraints must be re-verified (mirrors the seat-inspect flow).</summary>
+        public bool UnjamRestraint(int carIndex)
+        {
+            var f = Faults.Find(FaultType.RestraintJammedCar);
+            if (f == null) return false;
+            if (carIndex != f.TargetIndex)
+            {
+                Telemetry.Log(SimTime, "OPS", $"Car {carIndex + 1} lap bar seats fine — check the flagged car");
+                return false;
+            }
+            Faults.Resolve(FaultType.RestraintJammedCar);
+            PlatformTrain()?.InvalidateRestraints();
+            Telemetry.Log(SimTime, "OPS", $"Car {carIndex + 1} lap bar freed — re-verify restraints");
+            return true;
+        }
+
         // ---- Simulation tick ----
 
         public void Tick(float dt)
@@ -293,7 +368,7 @@ namespace ParkShift.Core
             bool rideDown = Faults.Active.Count > 0 || LotoEngaged;
             if (rideDown) Score.AddDowntime(dt);
 
-            Guests.Tick(dt, rideDown);
+            Guests.Tick(dt, rideDown, SimTime);
             Faults.Tick(dt, SimTime);
 
             foreach (var t in Trains)
@@ -363,6 +438,10 @@ namespace ParkShift.Core
 
             // Condition fault: dispatch timeout
             var p = PlatformTrain();
+            // Stalled-queue mood drain: a platform train loitering past the grace window sours the crowd.
+            if (p != null && p.StationIdleSeconds > Config.StallGraceSeconds
+                && Config.SatisfactionStallDrainPerSecond > 0f)
+                Guests.Penalize(Config.SatisfactionStallDrainPerSecond * dt);
             if (p != null && p.StationIdleSeconds > Config.DispatchTimeoutSeconds && !_timeoutFaultLatched)
             { Faults.Trigger(FaultType.DispatchTimeout, SimTime); _timeoutFaultLatched = true; }
             if (_timeoutFaultLatched && (p == null || p.StationIdleSeconds < 1f))

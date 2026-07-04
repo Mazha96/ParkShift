@@ -75,6 +75,10 @@ namespace ParkShift.Core
                     case FaultType.GateSensorFault: _sim.CycleGates(); return true;
                     case FaultType.RestraintNotVerified: _sim.InspectFaultySeat(); return true;
                     case FaultType.GuestDroppedItem: _sim.ClearDroppedItem(); return true;
+                    case FaultType.BlockSensorGhost:
+                        if (!f.Inspected) _sim.VerifyBlockClear(); else _sim.ResetBlockSensor();
+                        return true;
+                    case FaultType.RestraintJammedCar: _sim.UnjamRestraint(f.TargetIndex); return true;
                 }
             }
             return false;

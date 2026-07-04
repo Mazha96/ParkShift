@@ -26,5 +26,10 @@ namespace ParkShift.Tests
         [Test] public void ScoreCalculation() => Run(CoreTestSuite.Test_ScoreCalculation);
         [Test] public void SoloTuning() => Run(CoreTestSuite.Test_SoloTuning);
         [Test] public void FullShiftEndsAndTelemetry() => Run(CoreTestSuite.Test_FullShiftEndsAndTelemetry);
+        [Test] public void BlockSensorGhostFault() => Run(CoreTestSuite.Test_BlockSensorGhostFault);
+        [Test] public void PowerBrownoutStagedRestart() => Run(CoreTestSuite.Test_PowerBrownoutStagedRestart);
+        [Test] public void RestraintJamTargetsCar() => Run(CoreTestSuite.Test_RestraintJamTargetsCar);
+        [Test] public void EscalationRampAndSurge() => Run(CoreTestSuite.Test_EscalationRampAndSurge);
+        [Test] public void ComboScoringAndSatisfaction() => Run(CoreTestSuite.Test_ComboScoringAndSatisfaction);
     }
 }

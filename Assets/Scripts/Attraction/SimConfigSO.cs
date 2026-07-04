@@ -27,6 +27,40 @@ namespace ParkShift.Attraction
                  "Default: station crawl, fast lift, full course x3, slow brake run.")]
         public float[] BlockSpeedMultipliers = { 1f, 1.6f, 1.15f, 1.15f, 1.15f, 0.55f };
 
+        [Header("Extended faults & escalation")]
+        [Tooltip("Adds the three extended faults (block sensor ghost, power brownout, restraint jam) to the random pool.")]
+        public bool ExtendedFaultsEnabled = false;
+        [Tooltip("Cars per train — the restraint-jam fault flags one of these as its target.")]
+        public int CarsPerTrain = 4;
+        [Tooltip("Seconds each brownout restart stage must stabilize before the next is accepted.")]
+        public float BrownoutStageSeconds = 2f;
+        [Tooltip("Staged-restart steps required to clear a power brownout.")]
+        public int BrownoutStageCount = 3;
+        [Tooltip("Random fault chance ramps linearly to base*this by shift end. 1 = flat (legacy).")]
+        public float FaultRampMultiplier = 1f;
+        [Tooltip("Guest arrival rate ramps linearly to base*this by shift end. 1 = flat (legacy).")]
+        public float GuestArrivalRampMultiplier = 1f;
+        [Tooltip("Periodic guest surge waves (deterministic time windows).")]
+        public bool SurgeWavesEnabled = false;
+        [Tooltip("A surge window opens at the end of every period of this length (seconds).")]
+        public float SurgeWavePeriodSeconds = 45f;
+        [Tooltip("How long each surge window lasts (seconds).")]
+        public float SurgeWaveDurationSeconds = 8f;
+        [Tooltip("Guest arrival rate multiplier while a surge window is open.")]
+        public float SurgeWaveSpawnMultiplier = 3f;
+
+        [Header("Scoring depth")]
+        [Tooltip("Bonus points per streak step on consecutive clean dispatches. 0 disables the combo.")]
+        public int ComboBonusPerStreak = 5;
+        [Tooltip("Streak steps that keep earning bonus (caps the combo multiplier).")]
+        public int ComboStreakCap = 5;
+        [Tooltip("Satisfaction recovered on each dispatch (smooth-operation reward).")]
+        public float SatisfactionPerSmoothDispatch = 1.5f;
+        [Tooltip("Platform idle seconds before the stalled-queue satisfaction drain kicks in.")]
+        public float StallGraceSeconds = 12f;
+        [Tooltip("Extra satisfaction drain per second while the platform train sits stalled.")]
+        public float SatisfactionStallDrainPerSecond = 0.15f;
+
         [Header("Motion feel")]
         [Tooltip("Ramp up from a stop and coast smoothly onto the brake run instead of snapping to speed / hard-stopping.")]
         public bool SmoothMotion = true;
@@ -55,7 +89,22 @@ namespace ParkShift.Attraction
                 SmoothMotion = SmoothMotion,
                 BrakePoint01 = BrakePoint01,
                 BrakeDecel = BrakeDecel,
-                LaunchAccel = LaunchAccel
+                LaunchAccel = LaunchAccel,
+                ExtendedFaultsEnabled = ExtendedFaultsEnabled,
+                CarsPerTrain = CarsPerTrain,
+                BrownoutStageSeconds = BrownoutStageSeconds,
+                BrownoutStageCount = BrownoutStageCount,
+                FaultRampMultiplier = FaultRampMultiplier,
+                GuestArrivalRampMultiplier = GuestArrivalRampMultiplier,
+                SurgeWavesEnabled = SurgeWavesEnabled,
+                SurgeWavePeriodSeconds = SurgeWavePeriodSeconds,
+                SurgeWaveDurationSeconds = SurgeWaveDurationSeconds,
+                SurgeWaveSpawnMultiplier = SurgeWaveSpawnMultiplier,
+                ComboBonusPerStreak = ComboBonusPerStreak,
+                ComboStreakCap = ComboStreakCap,
+                SatisfactionPerSmoothDispatch = SatisfactionPerSmoothDispatch,
+                StallGraceSeconds = StallGraceSeconds,
+                SatisfactionStallDrainPerSecond = SatisfactionStallDrainPerSecond
             };
         }
     }

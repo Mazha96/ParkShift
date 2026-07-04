@@ -53,6 +53,43 @@ namespace ParkShift.Core
         public float AssistantFixSeconds = 8f;            // "call remote tech" auto-fix delay
         public float TechFaultChancePerSecond = 0.03f;    // major incident rate while in tech scenario mode
 
+        // ---- Extended fault catalog (off by default — behavior-preserving) ----
+        /// <summary>When true, the three extended faults (block sensor ghost, power brownout,
+        /// restraint jam) join the random pool. Off by default so legacy runs are byte-identical.</summary>
+        public bool ExtendedFaultsEnabled = false;
+        /// <summary>Cars per train — the restraint-jam fault picks one of these as its target.</summary>
+        public int CarsPerTrain = 4;
+        /// <summary>Seconds each brownout restart stage must stabilize before the next is accepted.</summary>
+        public float BrownoutStageSeconds = 2f;
+        /// <summary>Staged-restart steps required to clear a power brownout.</summary>
+        public int BrownoutStageCount = 3;
+
+        // ---- Escalating difficulty (flat by default — behavior-preserving) ----
+        /// <summary>Random fault chance ramps linearly to base*this by shift end. 1 = flat (legacy).</summary>
+        public float FaultRampMultiplier = 1f;
+        /// <summary>Guest arrival rate ramps linearly to base*this by shift end. 1 = flat (legacy).</summary>
+        public float GuestArrivalRampMultiplier = 1f;
+        /// <summary>Periodic guest surge waves (deterministic, time-based windows).</summary>
+        public bool SurgeWavesEnabled = false;
+        /// <summary>A surge window opens at the end of every period of this length.</summary>
+        public float SurgeWavePeriodSeconds = 45f;
+        /// <summary>How long each surge window lasts.</summary>
+        public float SurgeWaveDurationSeconds = 8f;
+        /// <summary>Guest arrival rate multiplier while a surge window is open.</summary>
+        public float SurgeWaveSpawnMultiplier = 3f;
+
+        // ---- Scoring depth ----
+        /// <summary>Bonus points per streak step on consecutive clean dispatches. 0 disables the combo.</summary>
+        public int ComboBonusPerStreak = 5;
+        /// <summary>Streak steps that keep earning bonus (caps the combo multiplier).</summary>
+        public int ComboStreakCap = 5;
+        /// <summary>Satisfaction recovered each time a train dispatches (smooth-operation reward).</summary>
+        public float SatisfactionPerSmoothDispatch = 1.5f;
+        /// <summary>Platform idle seconds before the stalled-queue satisfaction drain kicks in.</summary>
+        public float StallGraceSeconds = 12f;
+        /// <summary>Extra satisfaction drain per second while the platform train sits stalled.</summary>
+        public float SatisfactionStallDrainPerSecond = 0.15f;
+
         /// <summary>Optional per-block speed multiplier (>1 = faster). Index = block.
         /// Null or short array falls back to 1.0 — keeps default timing and tests unchanged.</summary>
         public float[] BlockSpeedMultipliers;

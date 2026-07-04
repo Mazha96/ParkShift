@@ -12,8 +12,11 @@ namespace ParkShift.Attraction
         public enum Kind { ShiftStart, GateLever, LoadHelper, RestraintCheck, DispatchButton,
                            SeatInspect, DroppedItem, LotoLever, MaintenancePanel, AssistantPhone,
                            IntruderEscort, CollisionInspect, WinchPanel,
-                           UnloadDoorOpen, UnloadDoorClose, ReleaseRestraints, HmiScreen }
+                           UnloadDoorOpen, UnloadDoorClose, ReleaseRestraints, HmiScreen,
+                           BlockVerify, SensorReset, BrownoutStage, LapBarUnjam }
         public Kind PanelKind;
+        [Tooltip("LapBarUnjam only: which car's lap bar this interactable frees (0-based).")]
+        public int CarIndex;
 
         AttractionManager M => AttractionManager.Instance;
         AttractionSim S => M.Sim;
@@ -78,6 +81,31 @@ namespace ParkShift.Attraction
                     return S.UnloadDoorOpen ? "Release restraints" : "Release restraints — open the door first";
                 case Kind.HmiScreen:
                     return UI.HmiPanel.IsOpen ? "Close HMI" : "Read ride HMI / add RVs";
+                case Kind.BlockVerify:
+                {
+                    var f = S.Faults.Find(FaultType.BlockSensorGhost);
+                    if (f == null) return null;
+                    return f.Inspected ? "Zone verified — reset the sensor at the booth"
+                                       : "Verify block clear (visual check)";
+                }
+                case Kind.SensorReset:
+                {
+                    var f = S.Faults.Find(FaultType.BlockSensorGhost);
+                    if (f == null) return null;
+                    return f.Inspected ? "Reset zone sensor"
+                                       : "Reset refused — verify the block on foot first";
+                }
+                case Kind.BrownoutStage:
+                {
+                    var f = S.Faults.Find(FaultType.PowerBrownout);
+                    if (f == null) return null;
+                    if (!role.CanUseMaintenance) return "Drive bus restart (Technician only — Tab)";
+                    return $"Energize bus stage {Mathf.Min(f.Stage + 1, S.Config.BrownoutStageCount)}/{S.Config.BrownoutStageCount}";
+                }
+                case Kind.LapBarUnjam:
+                    // Same prompt on every car — the HMI names the flagged one; wrong cars are refused.
+                    return S.Faults.HasFault(FaultType.RestraintJammedCar)
+                        ? $"Check car {CarIndex + 1} lap bar" : null;
             }
             return null;
         }
@@ -106,6 +134,14 @@ namespace ParkShift.Attraction
                 case Kind.UnloadDoorClose: M.Submit(OpVerb.CloseUnloadDoor); break;
                 case Kind.ReleaseRestraints: M.Submit(OpVerb.ReleaseRestraints); break;
                 case Kind.HmiScreen: UI.HmiPanel.Toggle(); break;   // client-side UI, not a sim verb
+                case Kind.BlockVerify: M.Submit(OpVerb.VerifyBlockClear); break;
+                case Kind.SensorReset: M.Submit(OpVerb.ResetBlockSensor); break;
+                case Kind.BrownoutStage: if (role.CanUseMaintenance) M.Submit(OpVerb.AdvanceBrownoutStage); break;
+                case Kind.LapBarUnjam:
+                    M.Submit(CarIndex <= 0 ? OpVerb.UnjamCar0
+                           : CarIndex == 1 ? OpVerb.UnjamCar1
+                           : CarIndex == 2 ? OpVerb.UnjamCar2 : OpVerb.UnjamCar3);
+                    break;
             }
         }
     }

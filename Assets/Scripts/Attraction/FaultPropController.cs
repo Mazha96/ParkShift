@@ -12,6 +12,12 @@ namespace ParkShift.Attraction
         public GameObject IntruderProp;     // guest standing on the track
         public GameObject CollisionProp;    // contact-point marker on the brake run approach
         public GameObject ValleyedProp;     // stall marker out on the course
+        public GameObject GhostSensorProp;      // phantom-occupancy beacon on the zone sensor post
+        public GameObject BrownoutCabinetProp;  // undervolt warning light on the drive cabinet
+        public GameObject JammedCarProp;        // lap-bar jam flag over the flagged car
+        [Tooltip("Optional per-car anchors (Load berth check points). When set, the jam flag " +
+                 "snaps to the anchor matching the fault's TargetIndex.")]
+        public Transform[] JammedCarAnchors;
 
         void Update()
         {
@@ -23,6 +29,17 @@ namespace ParkShift.Attraction
             if (IntruderProp) IntruderProp.SetActive(s.Faults.HasFault(FaultType.TrackIntrusion));
             if (CollisionProp) CollisionProp.SetActive(s.Faults.HasFault(FaultType.TrainCollision));
             if (ValleyedProp) ValleyedProp.SetActive(s.Faults.HasFault(FaultType.TrainValleyed));
+            if (GhostSensorProp) GhostSensorProp.SetActive(s.Faults.HasFault(FaultType.BlockSensorGhost));
+            if (BrownoutCabinetProp) BrownoutCabinetProp.SetActive(s.Faults.HasFault(FaultType.PowerBrownout));
+            if (JammedCarProp)
+            {
+                var jam = s.Faults.Find(FaultType.RestraintJammedCar);
+                JammedCarProp.SetActive(jam != null);
+                if (jam != null && JammedCarAnchors != null
+                    && jam.TargetIndex >= 0 && jam.TargetIndex < JammedCarAnchors.Length
+                    && JammedCarAnchors[jam.TargetIndex] != null)
+                    JammedCarProp.transform.position = JammedCarAnchors[jam.TargetIndex].position;
+            }
         }
     }
 }
