@@ -97,11 +97,23 @@ namespace ParkShift.UI
 
             Button(_root.transform, "ADD RV", new Vector2(-190, -238), () =>
             {
+                // Through the verb funnel so a FishNet client's Add RV executes on the server
+                // (the RV count replicates back; solo/host behave exactly as before).
                 var m = AttractionManager.Instance;
-                if (m != null && !m.AddRv()) Debug.Log("[HMI] No room to add another RV.");
+                bool ok = m != null && m.Submit(OpVerb.AddRv);
+                if (ok) Juice.AudioDirector.Confirm(); else Juice.AudioDirector.Refuse();
+                if (!ok) Debug.Log("[HMI] No room to add another RV.");
             });
-            Button(_root.transform, "READ FAULTS", new Vector2(0, -238), RefreshStatus);
-            Button(_root.transform, "CLOSE", new Vector2(190, -238), () => SetOpen(false));
+            Button(_root.transform, "READ FAULTS", new Vector2(0, -238), () =>
+            {
+                Juice.AudioDirector.Confirm();
+                RefreshStatus();
+            });
+            Button(_root.transform, "CLOSE", new Vector2(190, -238), () =>
+            {
+                Juice.AudioDirector.Confirm();
+                SetOpen(false);
+            });
         }
 
         GameObject Box(Transform parent, string name, Vector2 size, Color color)

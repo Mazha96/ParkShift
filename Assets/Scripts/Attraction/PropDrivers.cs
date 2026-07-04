@@ -10,18 +10,34 @@ namespace ParkShift.Attraction
     {
         public Transform T;
         public Vector3 OffsetEuler;
+        [Tooltip("Springy overshoot on arrival (0 = classic smoothstep, 1 = standard ease-out-back).")]
+        public float Overshoot = 0f;
         Quaternion _rest;
         float _t;
         bool _init;
 
         public Hinge(Transform t, Vector3 offsetEuler) { T = t; OffsetEuler = offsetEuler; }
 
+        /// <summary>Normalized throw position (0 = rest, 1 = engaged) — for completion edges.</summary>
+        public float Position { get { return _t; } }
+
         public void Tick(bool engaged, float dt, float speed = 3.5f)
         {
             if (T == null) return;
             if (!_init) { _rest = T.localRotation; _init = true; }
             _t = Mathf.MoveTowards(_t, engaged ? 1f : 0f, speed * dt);
-            T.localRotation = _rest * Quaternion.Euler(OffsetEuler * Mathf.SmoothStep(0f, 1f, _t));
+            float k = Overshoot > 0.001f ? EaseOutBack(_t, Overshoot) : Mathf.SmoothStep(0f, 1f, _t);
+            T.localRotation = _rest * Quaternion.Euler(OffsetEuler * k);
+        }
+
+        /// <summary>Ease-out-back: swings a little past the target, then settles — the springy
+        /// lever feel. s scales the standard overshoot constant (1 ≈ 10% overshoot).</summary>
+        static float EaseOutBack(float t, float s)
+        {
+            float c1 = 1.70158f * Mathf.Clamp(s, 0f, 3f);
+            float c3 = c1 + 1f;
+            float u = t - 1f;
+            return 1f + c3 * u * u * u + c1 * u * u;
         }
     }
 
@@ -32,8 +48,15 @@ namespace ParkShift.Attraction
         public Vector3 OpenEulerL = new Vector3(0, 0, -100);
         public Vector3 OpenEulerR = new Vector3(0, 0, 100);
         Hinge _l, _r;
+        float _lastPos;
 
-        void Start() { _l = new Hinge(DoorL, OpenEulerL); _r = new Hinge(DoorR, OpenEulerR); }
+        void Start()
+        {
+            _l = new Hinge(DoorL, OpenEulerL);
+            _r = new Hinge(DoorR, OpenEulerR);
+            _l.Overshoot = 1f;   // doors swing with a springy settle instead of a robotic stop
+            _r.Overshoot = 1f;
+        }
 
         void Update()
         {
@@ -42,6 +65,19 @@ namespace ParkShift.Attraction
             bool open = m.Sim.Guests.GatesOpen;
             _l.Tick(open, Time.deltaTime);
             _r.Tick(open, Time.deltaTime);
+
+            // Completion edges: a click + dust puff when the doors land fully open or closed.
+            float pos = _l.Position;
+            if (_lastPos < 0.98f && pos >= 0.98f) OnDoorsSettled();
+            else if (_lastPos > 0.02f && pos <= 0.02f) OnDoorsSettled();
+            _lastPos = pos;
+        }
+
+        void OnDoorsSettled()
+        {
+            Vector3 p = DoorL != null ? DoorL.position : transform.position;
+            Juice.JuiceFx.DustPuff(p + Vector3.down * 0.2f);
+            Juice.AudioDirector.GateClick(p);
         }
     }
 
@@ -56,7 +92,11 @@ namespace ParkShift.Attraction
         void Start()
         {
             _h = new Hinge[Bars.Length];
-            for (int i = 0; i < Bars.Length; i++) _h[i] = new Hinge(Bars[i], ClosedEuler);
+            for (int i = 0; i < Bars.Length; i++)
+            {
+                _h[i] = new Hinge(Bars[i], ClosedEuler);
+                _h[i].Overshoot = 0.7f;   // bars land with a little clack-bounce
+            }
         }
 
         void Update()
@@ -88,11 +128,24 @@ namespace ParkShift.Attraction
         bool _btnInit;
         float _pulse;
         int _lastDispatches;
+        Renderer _btnRenderer;
+        Color _btnBaseColor = Color.white;
+        MaterialPropertyBlock _mpb;
+        static readonly int ColorId = Shader.PropertyToID("_Color");
 
         void Start()
         {
             _lever = new Hinge(Lever, LeverPulledEuler);
-            if (Button) { _btnRestPos = Button.localPosition; _btnRestScale = Button.localScale; _btnInit = true; }
+            _lever.Overshoot = 1.2f;   // gate lever lands with a satisfying spring
+            if (Button)
+            {
+                _btnRestPos = Button.localPosition; _btnRestScale = Button.localScale; _btnInit = true;
+                _btnRenderer = Button.GetComponentInChildren<Renderer>();
+                if (_btnRenderer != null && _btnRenderer.sharedMaterial != null
+                    && _btnRenderer.sharedMaterial.HasProperty(ColorId))
+                    _btnBaseColor = _btnRenderer.sharedMaterial.color;
+                _mpb = new MaterialPropertyBlock();
+            }
         }
 
         void Update()
@@ -109,6 +162,13 @@ namespace ParkShift.Attraction
                 float k = Mathf.Sin(Mathf.Clamp01(_pulse) * Mathf.PI);   // 0 -> 1 -> 0 over the press
                 Button.localPosition = _btnRestPos - new Vector3(0f, 0f, k * ButtonPressDepth); // depress into the panel
                 Button.localScale = Vector3.Scale(_btnRestScale, new Vector3(1f, 1f, 1f - k * ButtonSquash));
+                // Light the button up while it's pressed (property block — no material instancing).
+                if (_btnRenderer != null && _mpb != null)
+                {
+                    _btnRenderer.GetPropertyBlock(_mpb);
+                    _mpb.SetColor(ColorId, Color.Lerp(_btnBaseColor, Color.white, k * 0.85f));
+                    _btnRenderer.SetPropertyBlock(_mpb);
+                }
             }
         }
     }
@@ -162,16 +222,35 @@ namespace ParkShift.Attraction
         Vector3 _rest;
         bool _init;
         float _p;
+        Renderer _r;
+        Color _baseColor = Color.white;
+        MaterialPropertyBlock _mpb;
+        static readonly int ColorId = Shader.PropertyToID("_Color");
 
         public void Trigger() { _p = 1f; }
 
         public void Tick(float dt)
         {
             if (T == null) return;
-            if (!_init) { _rest = T.localScale; _init = true; }
+            if (!_init)
+            {
+                _rest = T.localScale;
+                _r = T.GetComponentInChildren<Renderer>();
+                if (_r != null && _r.sharedMaterial != null && _r.sharedMaterial.HasProperty(ColorId))
+                    _baseColor = _r.sharedMaterial.color;
+                _mpb = new MaterialPropertyBlock();
+                _init = true;
+            }
             _p = Mathf.MoveTowards(_p, 0f, Speed * dt);
-            float squash = Mathf.Sin(Mathf.Clamp01(_p) * Mathf.PI) * Depth;
-            T.localScale = Vector3.Scale(_rest, new Vector3(1f, 1f, 1f - squash));
+            float k = Mathf.Sin(Mathf.Clamp01(_p) * Mathf.PI);
+            T.localScale = Vector3.Scale(_rest, new Vector3(1f, 1f, 1f - k * Depth));
+            // Press = light up: buttons flash toward white while depressed, then fade home.
+            if (_r != null && _mpb != null)
+            {
+                _r.GetPropertyBlock(_mpb);
+                _mpb.SetColor(ColorId, Color.Lerp(_baseColor, Color.white, k * 0.85f));
+                _r.SetPropertyBlock(_mpb);
+            }
         }
     }
 
@@ -184,7 +263,7 @@ namespace ParkShift.Attraction
         public float Speed = 5f;
         Hinge _h;
 
-        void Start() { _h = new Hinge(Pivot, OnEuler); }
+        void Start() { _h = new Hinge(Pivot, OnEuler); _h.Overshoot = 1.3f; }
 
         void Update()
         {
@@ -206,7 +285,7 @@ namespace ParkShift.Attraction
         Hinge _h;
         float _phase;
 
-        void Start() { _h = new Hinge(Pivot, CrankEuler); }
+        void Start() { _h = new Hinge(Pivot, CrankEuler); _h.Overshoot = 0.8f; }
 
         void Update()
         {

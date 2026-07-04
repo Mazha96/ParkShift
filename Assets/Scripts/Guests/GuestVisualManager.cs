@@ -135,8 +135,22 @@ namespace ParkShift.Guests
             Color hoodie = Color.HSVToRGB(Random.value, Random.Range(0.45f, 0.8f), Random.Range(0.7f, 1f));
             var g = GuestPrefab != null ? SpawnDewey(hoodie) : SpawnCapsule(hoodie);
             g.transform.position = SpawnPoint ? SpawnPoint.position : Vector3.zero;
+            // Queue life: phase-randomized idle bounce + cheer hops (self-managing component).
+            g.AddComponent<ParkShift.Juice.GuestBounce>();
             _queueGuests.Add(g);
             _nodes.Add(SpawnNode);
+        }
+
+        /// <summary>Queue-wide celebration hop — called by the juice layer on each dispatch.
+        /// Purely visual; safe to call at any time.</summary>
+        public void Cheer()
+        {
+            for (int i = 0; i < _queueGuests.Count; i++)
+            {
+                if (_queueGuests[i] == null) continue;
+                var b = _queueGuests[i].GetComponent<ParkShift.Juice.GuestBounce>();
+                if (b != null) b.Hop(Random.Range(0.45f, 1f));
+            }
         }
 
         GameObject SpawnDewey(Color hoodie)

@@ -48,6 +48,9 @@ namespace ParkShift.UI
         public void Show(AttractionSim sim)
         {
             int score = sim.Score.Compute(sim.Guests.Satisfaction);
+            string grade = sim.Score.Grade(score);
+            // Grade-themed fanfare (triumphant for S/A, glum for D/F). Null-safe if no director.
+            ParkShift.Juice.AudioDirector.Fanfare(grade.Length > 0 ? grade[0] : 'C');
             _body.text =
                 "SHIFT COMPLETE — COSMIC CONVEYOR\n\n" +
                 $"Riders served: {sim.Score.RidersServed}\n" +
@@ -57,7 +60,7 @@ namespace ParkShift.UI
                 $"Combo bonus: +{sim.Score.ComboBonusPoints}\n" +
                 $"Downtime: {sim.Score.DowntimeSeconds:0.0}s\n" +
                 $"Final satisfaction: {sim.Guests.Satisfaction:0}%\n\n" +
-                $"SCORE: {score}\n{sim.Score.Grade(score)}";
+                $"SCORE: {score}\n{grade}";
             _panel.SetActive(true);
             Cursor.lockState = CursorLockMode.None;
         }

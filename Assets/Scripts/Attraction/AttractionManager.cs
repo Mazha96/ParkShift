@@ -16,7 +16,10 @@ namespace ParkShift.Attraction
                          // Extended fault catalog (Wave 1). UnjamCar0..3 are one verb per car so
                          // the verb funnel stays a plain enum (network-safe, no payload needed).
                          VerifyBlockClear, ResetBlockSensor, AdvanceBrownoutStage,
-                         UnjamCar0, UnjamCar1, UnjamCar2, UnjamCar3 }
+                         UnjamCar0, UnjamCar1, UnjamCar2, UnjamCar3,
+                         // Wave 2 (final review): HMI "Add RV" routed through the funnel so a
+                         // FishNet client's Add RV runs server-side (the count then replicates).
+                         AddRv }
 
     /// <summary>
     /// Unity bridge for the engine-agnostic AttractionSim.
@@ -216,6 +219,7 @@ namespace ParkShift.Attraction
                 case OpVerb.UnjamCar1: return Sim.UnjamRestraint(1);
                 case OpVerb.UnjamCar2: return Sim.UnjamRestraint(2);
                 case OpVerb.UnjamCar3: return Sim.UnjamRestraint(3);
+                case OpVerb.AddRv: return AddRv();
                 case OpVerb.CallAssistant:
                     if (_assistantTimer <= 0f && Sim.Faults.Active.Count > 0)
                     {

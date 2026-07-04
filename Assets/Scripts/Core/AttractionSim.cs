@@ -358,6 +358,34 @@ namespace ParkShift.Core
             return true;
         }
 
+        // ---- Client mirror setter (multiplayer presentation only) ----
+
+        /// <summary>Stamp replicated ops state onto this (never-ticked) mirror sim: attraction
+        /// state, sim clock and the unload-workflow flags — enough for client HUD/prompts,
+        /// including reaching EndOfShift. Fires OnUnloadReleased on the restraints-released
+        /// rising edge (when the RV at Unload can be resolved) so the visual layer plays the
+        /// guest walk-out, and OnShiftEnded once when the mirrored state first reaches
+        /// EndOfShift. Never called when authoritative; determinism untouched.</summary>
+        public void MirrorOps(AttractionState state, float simTime,
+                              bool unloadDoorOpen, bool restraintsReleased,
+                              bool unloadAreaClear, bool guestsUnloading)
+        {
+            SimTime = simTime < 0f ? 0f : simTime;
+            UnloadDoorOpen = unloadDoorOpen;
+            bool releasedEdge = restraintsReleased && !RestraintsReleased;
+            RestraintsReleased = restraintsReleased;
+            UnloadAreaClear = unloadAreaClear;
+            GuestsUnloading = guestsUnloading;
+            bool endedEdge = state == AttractionState.EndOfShift && State != AttractionState.EndOfShift;
+            SetState(state);
+            if (releasedEdge)
+            {
+                var rv = UnloadingTrain();
+                if (rv != null) OnUnloadReleased?.Invoke(rv);
+            }
+            if (endedEdge) OnShiftEnded?.Invoke();
+        }
+
         // ---- Simulation tick ----
 
         public void Tick(float dt)

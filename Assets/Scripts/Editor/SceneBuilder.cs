@@ -622,6 +622,10 @@ namespace ParkShift.EditorTools
                 var tv = body.AddComponent<TrainVisual>();
                 tv.TrainId = id; tv.Path = path;
                 tv.SeatAnchors = seats;
+                // Per-train juice: speed-driven rumble loop, launch squash/whoosh, brake sparks,
+                // restraint clunk + click flash. Runtime-added RVs get theirs from JuiceDirector.
+                var tj = body.AddComponent<ParkShift.Juice.TrainJuice>();
+                tj.TrainId = id;
                 Label(body, "TRAIN " + (id == 0 ? "A" : "B"), 1.6f);
                 return tv;
             };
@@ -1269,6 +1273,22 @@ namespace ParkShift.EditorTools
             attractionMgr.Track = path;
             attractionMgr.GuestVisuals = gvm;
             attractionMgr.AddedRvMaterial = mTrainB;
+            // ---- Juice: procedural audio + particle FX + game-feel director (no asset files;
+            // everything is synthesized/configured in code at runtime). All components degrade
+            // gracefully if a reference is missing, so rebuilds stay safe. ----
+            var juiceGO = new GameObject("Juice");
+            var audioDir = juiceGO.AddComponent<ParkShift.Juice.AudioDirector>();
+            juiceGO.AddComponent<ParkShift.Juice.JuiceFx>();
+            var juiceDir = juiceGO.AddComponent<ParkShift.Juice.JuiceDirector>();
+            var queueCenter = new GameObject("QueueCenter");
+            queueCenter.transform.SetParent(juiceGO.transform, false);
+            queueCenter.transform.position = new Vector3(0f, 1.2f, -5.6f);   // middle of the serpentine
+            audioDir.QueueCenter = queueCenter.transform;                    // crowd walla + grumble loops
+            audioDir.StationCenter = stationCtl.LoadStopPoint;               // fault klaxon
+            juiceDir.QueueCenter = queueCenter.transform;                    // cheer origin
+            juiceDir.StationCenter = stationCtl.LoadStopPoint;               // confetti + dispatch FX
+            juiceDir.GateCenter = gateRoot.transform;                        // gate servo audio
+
             // Clickable ride HMI (opened from the console screen).
             new GameObject("HmiPanel").AddComponent<ParkShift.UI.HmiPanel>();
             new GameObject("NetworkBootstrap").AddComponent<Networking.NetworkBootstrap>();

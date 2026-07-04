@@ -67,6 +67,27 @@ namespace ParkShift.Core
             return n;
         }
 
+        /// <summary>Client mirror setter (multiplayer presentation only): steer QueueCount to the
+        /// replicated value, firing OnGuestSpawned per added guest and one OnGuestsBoarded batch
+        /// for a decrease — the same events the authoritative tick emits — so the visual queue
+        /// tracks the server. Never called when authoritative; determinism untouched.</summary>
+        public void MirrorQueue(int count)
+        {
+            if (count < 0) count = 0;
+            if (count > _cfg.QueueCapacity) count = _cfg.QueueCapacity;
+            while (QueueCount < count)
+            {
+                QueueCount++; TotalSpawned++;
+                OnGuestSpawned?.Invoke();
+            }
+            if (QueueCount > count)
+            {
+                int n = QueueCount - count;
+                QueueCount = count;
+                OnGuestsBoarded?.Invoke(n);
+            }
+        }
+
         public void RewardRiders(int riders) { Satisfaction = Clamp(Satisfaction + riders * _cfg.SatisfactionPerRider, 0f, 100f); }
         /// <summary>Smooth-operation reward: a dispatch visibly lifts the crowd's mood.</summary>
         public void RewardDispatch(float amount) { if (amount > 0f) Satisfaction = Clamp(Satisfaction + amount, 0f, 100f); }

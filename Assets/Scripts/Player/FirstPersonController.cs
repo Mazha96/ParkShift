@@ -23,18 +23,36 @@ namespace ParkShift.Player
         public float CoyoteTime = 0.12f;
         public KeyCode JumpKey = KeyCode.Space;
 
+        [Header("Feel (juice)")]
+        [Tooltip("Gentle view bob while walking. Turn off if it bothers you.")]
+        public bool EnableHeadBob = true;
+        [Tooltip("Head-bob height at full walk speed (m). Keep tiny.")]
+        public float BobAmplitude = 0.038f;
+        [Tooltip("Bob cycles per second at full walk speed.")]
+        public float BobFrequency = 1.9f;
+        [Tooltip("Minimum fall speed (m/s) that triggers the landing thump.")]
+        public float LandThumpMinFall = 5f;
+
         CharacterController _cc;
         float _pitch;
         float _smoothEyeY;   // smoothed world-space eye height
         bool _eyeInit;
         float _vy;           // vertical velocity (m/s), driven by gravity + jump
         float _coyote;       // remaining coyote grace
+        float _bobPhase;     // radians
+        float _bobWeight;    // 0..1 blend so the bob eases in/out with movement
+        float _landDip;      // camera dip right after a hard landing (m)
+        float _fallSpeed;    // fastest downward speed while airborne (for the landing thump)
+        bool _wasGrounded = true;
         public bool InputEnabled = true;
 
         void Awake()
         {
             _cc = GetComponent<CharacterController>();
             if (Cam == null) Cam = GetComponentInChildren<Camera>();
+            // Camera feel layer (shake/FOV kicks) — added here so every player rig gets one.
+            if (Cam != null && Cam.GetComponent<Juice.CameraJuice>() == null)
+                Cam.gameObject.AddComponent<Juice.CameraJuice>();
             Cursor.lockState = CursorLockMode.Locked;
         }
 
@@ -72,6 +90,40 @@ namespace ParkShift.Player
             _vy += Gravity * Time.deltaTime;
             _cc.Move((horizontal + Vector3.up * _vy) * Time.deltaTime);
 
+            // Landing thump: track the fastest fall while airborne; on touchdown, dip the
+            // camera and add a small kick of shake + a soft thump. Grounded state is read
+            // AFTER Move so touchdown registers on the frame it happens.
+            bool groundedNow = _cc.isGrounded;
+            if (!groundedNow) _fallSpeed = Mathf.Max(_fallSpeed, -_vy);
+            else if (!_wasGrounded)
+            {
+                if (_fallSpeed > LandThumpMinFall)
+                {
+                    float k = Mathf.Clamp01((_fallSpeed - LandThumpMinFall) / 8f);
+                    _landDip = 0.05f + 0.06f * k;
+                    Juice.CameraJuice.AddTrauma(0.12f + 0.18f * k);
+                    Juice.AudioDirector.Thump(0.5f + 0.5f * k);
+                }
+                _fallSpeed = 0f;
+            }
+            _wasGrounded = groundedNow;
+            _landDip = Mathf.MoveTowards(_landDip, 0f, 0.4f * Time.deltaTime);
+
+            // Head bob: phase advances with actual horizontal speed; weight eases in/out so
+            // starting/stopping never pops. |sin| gives the two-footstep cadence per cycle.
+            float bobX = 0f, bobY = 0f;
+            float hSpeed = new Vector3(_cc.velocity.x, 0f, _cc.velocity.z).magnitude;
+            bool bobbing = EnableHeadBob && groundedNow && hSpeed > 0.4f;
+            _bobWeight = Mathf.MoveTowards(_bobWeight, bobbing ? Mathf.Clamp01(hSpeed / MoveSpeed) : 0f,
+                                           4f * Time.deltaTime);
+            if (_bobWeight > 0.001f)
+            {
+                _bobPhase += Time.deltaTime * BobFrequency * 2f * Mathf.PI
+                             * Mathf.Clamp(hSpeed / MoveSpeed, 0.4f, 1.25f);
+                bobY = Mathf.Abs(Mathf.Sin(_bobPhase)) * BobAmplitude * _bobWeight;
+                bobX = Mathf.Cos(_bobPhase) * BobAmplitude * 0.55f * _bobWeight;
+            }
+
             // Smooth the camera's vertical motion so steps/ramps don't thump the view.
             if (Cam != null)
             {
@@ -81,8 +133,8 @@ namespace ParkShift.Player
                                          1f - Mathf.Exp(-VerticalSmoothing * Time.deltaTime));
                 // never let the lag exceed a comfortable bound (e.g. teleports)
                 _smoothEyeY = Mathf.Clamp(_smoothEyeY, targetEyeY - 0.4f, targetEyeY + 0.4f);
-                var lp = Cam.transform.localPosition;
-                Cam.transform.localPosition = new Vector3(lp.x, EyeHeight + (_smoothEyeY - targetEyeY), lp.z);
+                Cam.transform.localPosition = new Vector3(
+                    bobX, EyeHeight + (_smoothEyeY - targetEyeY) + bobY - _landDip, 0f);
             }
 
             if (Input.GetKeyDown(KeyCode.Escape))

@@ -19,6 +19,26 @@ namespace ParkShift.Attraction
                  "snaps to the anchor matching the fault's TargetIndex.")]
         public Transform[] JammedCarAnchors;
 
+        void Start()
+        {
+            // Alarm strobes on the marker-style props (skips the intruder guest and the LOTO
+            // tag, which should read as physical objects, not warning lights). FaultStrobe
+            // only runs while the prop is active, and its phase is synced to the klaxon.
+            AddStrobe(DroppedItemProp);
+            AddStrobe(FlaggedSeatProp);
+            AddStrobe(CollisionProp);
+            AddStrobe(ValleyedProp);
+            AddStrobe(GhostSensorProp);
+            AddStrobe(BrownoutCabinetProp);
+            AddStrobe(JammedCarProp);
+        }
+
+        static void AddStrobe(GameObject go)
+        {
+            if (go != null && go.GetComponent<Juice.FaultStrobe>() == null)
+                go.AddComponent<Juice.FaultStrobe>();
+        }
+
         void Update()
         {
             var s = AttractionManager.Instance != null ? AttractionManager.Instance.Sim : null;

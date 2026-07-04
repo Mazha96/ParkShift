@@ -140,6 +140,25 @@ namespace ParkShift.Core
             return false;
         }
 
+        /// <summary>Client mirror setter (multiplayer presentation only): stamp a replicated pose
+        /// onto this never-ticked RV. When the block changes, occupancy is re-registered with the
+        /// Vacate + ForcePlace pair (the same hooks used for spawn/despawn) so MayAdvance() and
+        /// the PlatformTrain()/UnloadingTrain() lookups stay truthful on clients. Never called
+        /// when authoritative, so solo/host/headless behavior is untouched.</summary>
+        public void MirrorPose(int block, float progress, TrainState state, float speed)
+        {
+            if (block < 0 || block >= _blocks.BlockCount) return; // config mismatch — ignore
+            if (block != CurrentBlock)
+            {
+                _blocks.Vacate(Id);
+                _blocks.ForcePlace(block, Id);
+                CurrentBlock = block;
+            }
+            Progress = progress;
+            State = state;
+            Speed = speed;
+        }
+
         /// <summary>Legacy motion: instant full speed, hard stop at the block exit when gated.
         /// Kept byte-for-byte so the headless core tests stay deterministic.</summary>
         void StepInstant(float dt, float traverse, bool mayAdvance)
