@@ -336,11 +336,16 @@ namespace ParkShift.EditorTools
                 Vector3 fwd = rot * Vector3.forward;
                 Quaternion frame = Quaternion.LookRotation(fwd, Vector3.up);
                 Vector3 side = frame * Vector3.left;   // west side — the walkway faces the park
-                Vector3 deckC = pos + side * 1.15f + Vector3.down * 0.35f;
+                // de-overlap: deck offset 1.15 -> 1.4 — the old inner edge sat at 0.75m from the
+                // rail centerline, exactly the train winglet half-width (zero clearance to the
+                // 1.9m-wide sweep envelope). Inner edge now 1.0m (> 0.95 envelope half-width).
+                Vector3 deckC = pos + side * 1.4f + Vector3.down * 0.35f;
                 var deck = Box($"CatwalkDeck{i:00}", deckC, new Vector3(0.8f, 0.06f, segLen + 0.12f), deckMat, root.transform);
                 deck.transform.rotation = frame;
-                var bracket = Box($"CatwalkBracket{i:00}", pos + side * 0.55f + Vector3.down * 0.42f,
-                                  new Vector3(1.0f, 0.07f, 0.12f), postMat, root.transform);
+                // de-overlap: bracket center 0.55 -> 0.62, length 1.0 -> 0.86 — the old inner end
+                // (0.05 from centerline) stabbed through the track support columns (0.13 half-width).
+                var bracket = Box($"CatwalkBracket{i:00}", pos + side * 0.62f + Vector3.down * 0.42f,
+                                  new Vector3(0.86f, 0.07f, 0.12f), postMat, root.transform);
                 bracket.transform.rotation = frame;
                 Vector3 postC = deckC + side * 0.36f;
                 var post = Box($"CatwalkPost{i:00}", postC + Vector3.up * 0.55f, new Vector3(0.06f, 1.1f, 0.06f), railMat, root.transform);
@@ -360,15 +365,18 @@ namespace ParkShift.EditorTools
             Vector3 baseFwd = baseRot * Vector3.forward;
             baseFwd.y = 0f;
             Quaternion baseYaw = Quaternion.LookRotation(baseFwd.normalized, Vector3.up);
-            BuildStairs("LiftStairs", basePos + baseYaw * new Vector3(-1.15f, 0f, 0f) + Vector3.down * 0.35f,
+            // de-overlap: stair-top offset -1.15 -> -1.4 to stay aligned with the widened deck.
+            BuildStairs("LiftStairs", basePos + baseYaw * new Vector3(-1.4f, 0f, 0f) + Vector3.down * 0.35f,
                         baseYaw * Quaternion.Euler(0f, 270f, 0f), root.transform, deckMat, railMat);
         }
 
-        /// <summary>Evac walkway beside the track at arc distance dCenter (right-hand side of
-        /// travel): deck + handrails + neon edge strip + stairs to ground (or a single step when
-        /// the shelf sits at grade) + a look-to-reveal nameplate matching the block number.</summary>
+        /// <summary>Evac walkway beside the track at arc distance dCenter (sideSign +1 =
+        /// right-hand side of travel, -1 = left): deck + handrails + neon edge strip + stairs to
+        /// ground (or a single step when the shelf sits at grade) + a look-to-reveal nameplate
+        /// matching the block number.</summary>
         static void BuildEvacPlatform(string name, TrackPath path, float dCenter, float length, Transform parent,
-                                      Material deckMat, Material railMat, Material accentMat, string label)
+                                      Material deckMat, Material railMat, Material accentMat, string label,
+                                      float sideSign, float sideOffset = 1.35f, float stepEndSign = 1f)
         {
             var root = new GameObject(name);
             root.transform.SetParent(parent, false);
@@ -376,8 +384,14 @@ namespace ParkShift.EditorTools
             Vector3 fwd = rot * Vector3.forward;
             fwd.y = 0f;
             Quaternion yaw = Quaternion.LookRotation(fwd.normalized, Vector3.up);
-            Vector3 side = yaw * Vector3.right;
-            Vector3 deckC = pos + side * 1.35f + Vector3.down * 0.25f;
+            Vector3 side = yaw * Vector3.right * Mathf.Sign(sideSign);
+            // de-overlap: deck drop 0.25 -> 0.40 — the old deck top (rail -0.20) and neon edge
+            // strip clipped the underside of the track cross-ties (tie bottoms at rail -0.225);
+            // at 0.40 the deck top (rail -0.35) and strip top (rail -0.285) clear them.
+            // de-overlap: lateral offset and the grade-step end are now parameters — B4 needs a
+            // wider stand-off (banked approach) and its step on the rear end (front end faces
+            // the station columns); B3 keeps the 1.35 offset and front step via the defaults.
+            Vector3 deckC = pos + side * sideOffset + Vector3.down * 0.40f;
             root.transform.position = deckC;
             var deck = Box($"{name}_Deck", deckC, new Vector3(1.5f, 0.1f, length), deckMat, root.transform);
             deck.transform.rotation = yaw;
@@ -395,11 +409,16 @@ namespace ParkShift.EditorTools
             strip.transform.rotation = yaw;
             if (deckC.y > 1.2f)
             {
-                BuildStairs($"{name}_Stairs", deckC + yaw * new Vector3(0f, 0f, length * 0.5f), yaw, root.transform, deckMat, railMat);
+                // de-overlap: stair flight shifted 0.35 to the deck's outer (away-from-track)
+                // side — centered on the deck, the track-side stair stringer ran at 0.80m from
+                // the rail centerline and its top 1.5m clipped the 0.95m sweep envelope where
+                // the MCBR shelf still carries the train (B3, arc z~41..42). At +0.35 outboard
+                // the inner stringer sits at 1.15m: clear, and still fully on the 1.5m deck.
+                BuildStairs($"{name}_Stairs", deckC + side * 0.35f + yaw * new Vector3(0f, 0f, length * 0.5f), yaw, root.transform, deckMat, railMat);
             }
             else
             {
-                var step = Box($"{name}_Step", deckC + yaw * new Vector3(0f, 0f, length * 0.5f + 0.35f) + Vector3.down * (deckC.y * 0.5f),
+                var step = Box($"{name}_Step", deckC + yaw * new Vector3(0f, 0f, stepEndSign * (length * 0.5f + 0.35f)) + Vector3.down * (deckC.y * 0.5f),
                                new Vector3(1.0f, Mathf.Max(0.1f, deckC.y), 0.6f), deckMat, root.transform);
                 step.transform.rotation = yaw;
             }
@@ -706,6 +725,10 @@ namespace ParkShift.EditorTools
                 new EditorBuildSettingsScene("Assets/Scenes/MainMenu.unity", true),
                 new EditorBuildSettingsScene("Assets/Scenes/PrototypeAttraction.unity", true),
             };
+            // Post-build overlap audit on the freshly saved attraction scene (it is still the
+            // open scene here). Best-effort: an audit failure must never break a scene build.
+            try { SceneAudit.RunAudit(); }
+            catch (System.Exception e) { Debug.LogWarning("[SceneAudit] post-build audit failed: " + e.Message); }
             EditorUtility.DisplayDialog("ParkShift", "Scenes built.\nOpen Assets/Scenes/PrototypeAttraction.unity and press Play,\nor play MainMenu for the menu flow.", "OK");
         }
 
@@ -812,9 +835,12 @@ namespace ParkShift.EditorTools
                 Ramp("RampQueue", new Vector3(0, 0.24f, -2.78f), new Vector3(3.0f, 0.1f, 2.25f), new Vector3(-13.7f, 0, 0));
             }
             // Booth-side ramp (east end, rising west onto the platform)
-            Ramp("RampBooth", new Vector3(8.15f, 0.24f, 0), new Vector3(2.25f, 0.1f, 3.0f), new Vector3(0, 0, -13.7f));
+            // de-overlap: both ramps narrowed z 3.0 -> 2.7 and recentered z 0 -> -0.15 — their
+            // old north edge (z 1.5) reached under the track and the raised plate corner clipped
+            // the cross-tie ends (ties span z 1.35..3.05 at y ~0.42). North edge now z 1.2.
+            Ramp("RampBooth", new Vector3(8.15f, 0.24f, -0.15f), new Vector3(2.25f, 0.1f, 2.7f), new Vector3(0, 0, -13.7f));
             // Maintenance-side ramp (west end, rising east onto the platform)
-            Ramp("RampMaint", new Vector3(-8.15f, 0.24f, 0), new Vector3(2.25f, 0.1f, 3.0f), new Vector3(0, 0, 13.7f));
+            Ramp("RampMaint", new Vector3(-8.15f, 0.24f, -0.15f), new Vector3(2.25f, 0.1f, 2.7f), new Vector3(0, 0, 13.7f));
 
             // ---- Station architecture: grape canopy with sloped skirts on white columns,
             // exposed beams, pulsing neon edge trim and a double-sided marquee sign ----
@@ -839,13 +865,24 @@ namespace ParkShift.EditorTools
             roofPulse.EmissionColor = new Color(0.25f, 0.95f, 1f);
             roofPulse.Intensity = 2.4f; roofPulse.PulseAmount = 0.12f; roofPulse.Speed = 1.2f;
             // Columns: white shafts with grape base + capital
-            foreach (var cx in new[] { -6.8f, 6.8f })
-                foreach (var cz in new[] { -1.9f, 3.1f })
-                {
-                    Cyl("RoofColumn", new Vector3(cx, 2f, cz), new Vector3(0.28f, 1.9f, 0.28f), mWhite, stationRoot.transform);
-                    Box("ColumnBase", new Vector3(cx, 0.4f, cz), new Vector3(0.5f, 0.8f, 0.5f), mRoof, stationRoot.transform);
-                    Box("ColumnCap", new Vector3(cx, 3.72f, cz), new Vector3(0.44f, 0.2f, 0.44f), mRoof, stationRoot.transform);
-                }
+            // de-overlap: north column row moved z 3.1 -> 3.45 — at 3.1 the shafts sat 0.19m and
+            // the bases 0.30m inside the train sweep envelope (z <= 3.15 at |y| 0.6..2.8); the
+            // bases even overlapped the actual winglet swept width (train edge z 2.95). Bases
+            // also slimmed 0.5 -> 0.44 so the south pair stops kissing fence post corners.
+            // de-overlap: north-EAST column moved from x 6.8 to x 3.8 — the departure curve's
+            // banking (BankAtDistance, clamps at 44 deg) starts rolling the train right at the
+            // straight's end (x~6), and the rolled 1.9x2.2 rider envelope's top corner sweeps
+            // out to z~4.5 by x 6.8: no column z under the roof line clears it. West of x~4.5
+            // the track is still flat, so the NE shaft slides along the roof edge to x 3.8
+            // (verified ~0.1m clearance against the banked sweep in the scratch model).
+            foreach (var cc in new[] { new Vector3(-6.8f, 0f, -1.9f), new Vector3(6.8f, 0f, -1.9f),
+                                       new Vector3(-6.8f, 0f, 3.45f), new Vector3(3.8f, 0f, 3.45f) })
+            {
+                float cx = cc.x, cz = cc.z;
+                Cyl("RoofColumn", new Vector3(cx, 2f, cz), new Vector3(0.28f, 1.9f, 0.28f), mWhite, stationRoot.transform);
+                Box("ColumnBase", new Vector3(cx, 0.4f, cz), new Vector3(0.44f, 0.8f, 0.44f), mRoof, stationRoot.transform);
+                Box("ColumnCap", new Vector3(cx, 3.72f, cz), new Vector3(0.44f, 0.2f, 0.44f), mRoof, stationRoot.transform);
+            }
             // ---- "GALAXY EXPRESS" marquee above the south (queue-side) roof edge ----
             var sign = new GameObject("StationSign");
             sign.transform.SetParent(stationRoot.transform, false);
@@ -989,11 +1026,25 @@ namespace ParkShift.EditorTools
             string[] blockNames = { "UNLOAD", "LOAD", "LIFT HILL", "LOOP + ZERO-G", "BRAKE RUN" };
             path.BlockStarts = new List<float>();
             path.BlockLabels = new List<string>();
+            // de-overlap: per-block marker offsets. The old uniform (0, 0.6, 1.4) offset is
+            // perpendicular only on the station straight (track runs +x there); at the lift crest
+            // (WP17, track heading +z) and the MCBR end (WP45, heading -z) it was ALONG the
+            // track, planting the marker post inside the first-drop / brake-run train path.
+            // Those two now offset sideways (+x, 1.6m > the 0.95m sweep half-width).
+            // de-overlap: marker 2 (WP8, x 6) pushed z 1.4 -> 1.9 and marker 4 (WP45) 1.6 -> 1.85
+            // — both stand where the track already banks (departure curve / MCBR exit dive) and
+            // the ROLLED envelope reaches past the flat-track clearances (marker 2 was 0.21m in,
+            // marker 4 grazed by 0.015m). Markers 0/1 sit on flat station track: unchanged.
+            Vector3[] markerOffset =
+            {
+                new Vector3(0f, 0.6f, 1.4f), new Vector3(0f, 0.6f, 1.4f), new Vector3(0f, 0.6f, 1.9f),
+                new Vector3(1.6f, 0.6f, 0f), new Vector3(1.85f, 0.6f, 0f),
+            };
             for (int b = 0; b < boundaryWp.Length; b++)
             {
                 path.BlockStarts.Add(wpDist[boundaryWp[b]] / trackLen);
                 path.BlockLabels.Add(blockNames[b]);
-                var post = Box($"BlockMarker_{b}", layout[boundaryWp[b]] + new Vector3(0, 0.6f, 1.4f),
+                var post = Box($"BlockMarker_{b}", layout[boundaryWp[b]] + markerOffset[b],
                                new Vector3(0.12f, 1.2f, 0.12f), mTrack, trackGO.transform);
                 Label(post, "BLOCK " + b + ": " + blockNames[b], 0.9f);
             }
@@ -1024,7 +1075,12 @@ namespace ParkShift.EditorTools
             // ---- Coaster infrastructure: lift catwalk, loop ring brace, zero-g ring gates,
             // evac platforms on both brake shelves, ground-level assembly point ----
             var coasterInfra = new GameObject("CoasterInfra");
-            BuildLiftCatwalk(path, wpDist[12], wpDist[17], coasterInfra.transform, mBooth, mWhite, mLampPole);
+            // de-overlap: catwalk start pushed 3.0m up the lift (wpDist[12] -> +3) — the first
+            // two deck/bracket/post bays sat where the pre-lift turn still banks the train
+            // (~44 -> ~14 deg over arc 30..33) and the rolled envelope's low winglet corner cut
+            // into them by up to 0.23m. From +3.0 on, the lift runs straight and every bay
+            // clears; the access stairs move up with the start and still reach grade.
+            BuildLiftCatwalk(path, wpDist[12] + 3.0f, wpDist[17], coasterInfra.transform, mBooth, mWhite, mLampPole);
             BuildLoopRing(new Vector3(17f, 9.4f, 60.5f), 8.6f, 17, coasterInfra.transform, mWhite, mNeonMagenta);
             int[] gateWp = { 33, 35, 37 };
             for (int g = 0; g < gateWp.Length; g++)
@@ -1034,17 +1090,29 @@ namespace ParkShift.EditorTools
                               g * 1.3f, g == 0 ? "ZERO-G SECTOR" : null);
             // Evac platform names match the block numbers a held train actually stops in.
             BuildEvacPlatform("EvacPlatformB3", path, wpDist[43], 10f, coasterInfra.transform,
-                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B3");
-            BuildEvacPlatform("EvacPlatformB4", path, wpDist[51] + 1.2f, 6f, coasterInfra.transform,
-                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B4");
+                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B3", 1f);
+            // de-overlap: B4 shelf moved to the LEFT (north) side of the final brake run — on the
+            // right it landed in the maintenance-ramp yard (deck clipped RampMaint's upper plate,
+            // its access step sat under the ramp, and it boxed in the OCC/exit-path area).
+            // de-overlap: B4 slid east (+1.2 -> +3.0), shortened (6 -> 4) and pushed out
+            // (side offset 1.35 -> 2.0) — the diving approach curve crosses x -14..-12 at
+            // z 2.2..6 and stays banked (up to 44 deg) until ~x -9.5, so the old west half sat
+            // on the incoming track corridor and the handrail run took the rolled envelope's
+            // top corner (pen up to 0.62m). Grade step moved to the WEST (rear) end: the east
+            // end now stops 0.13m short of the NW station column base. Verified clear incl.
+            // bank in the scratch sweep model.
+            BuildEvacPlatform("EvacPlatformB4", path, wpDist[51] + 3.0f, 4f, coasterInfra.transform,
+                              mBooth, mWhite, mNeonCyan, "EVAC PLATFORM B4", -1f, 2.0f, -1f);
             // Ground-level muster area beside the maintenance bay, clear of the course.
+            // de-overlap: whole cluster moved from z -0.5 to z 1.5 — the pad slab (z -2.3..1.3)
+            // interpenetrated the MaintBayFloor slab (z -7.5..-0.5) over a 3.3 x 1.8m patch.
             var muster = new GameObject("EvacAssemblyPoint");
-            muster.transform.position = new Vector3(-17f, 0f, -0.5f);
+            muster.transform.position = new Vector3(-17f, 0f, 1.5f);
             muster.transform.SetParent(coasterInfra.transform, true);
-            Box("AssemblyPad", new Vector3(-17f, 0.03f, -0.5f), new Vector3(4.6f, 0.06f, 3.6f), mGate, muster.transform);
-            Box("AssemblyPadCore", new Vector3(-17f, 0.055f, -0.5f), new Vector3(3.8f, 0.06f, 2.8f), mBooth, muster.transform);
-            Cyl("AssemblySignPole", new Vector3(-18.9f, 1.1f, -1.9f), new Vector3(0.08f, 1.1f, 0.08f), mLampPole, muster.transform);
-            var musterSign = Box("AssemblySign", new Vector3(-18.9f, 2.35f, -1.9f), new Vector3(1.5f, 0.7f, 0.1f), mGate, muster.transform);
+            Box("AssemblyPad", new Vector3(-17f, 0.03f, 1.5f), new Vector3(4.6f, 0.06f, 3.6f), mGate, muster.transform);
+            Box("AssemblyPadCore", new Vector3(-17f, 0.055f, 1.5f), new Vector3(3.8f, 0.06f, 2.8f), mBooth, muster.transform);
+            Cyl("AssemblySignPole", new Vector3(-18.9f, 1.1f, 0.1f), new Vector3(0.08f, 1.1f, 0.08f), mLampPole, muster.transform);
+            var musterSign = Box("AssemblySign", new Vector3(-18.9f, 2.35f, 0.1f), new Vector3(1.5f, 0.7f, 0.1f), mGate, muster.transform);
             Label(musterSign, "EVAC ASSEMBLY POINT", 0.6f);
 
             // ---- Trains (Blender CoasterTrain.fbx; procedural factory as fallback) ----
@@ -1108,8 +1176,12 @@ namespace ParkShift.EditorTools
             Label(flagged, "ROW 3", 1.3f);
 
             // ---- Station gates (Blender swing-door units; sliding cubes as fallback) ----
+            // de-overlap: gate line moved z 1.2 -> 1.05 — closed leaves/posts sat 0.03m from the
+            // 0.95m-half-width sweep envelope and the post caps 0.015m INSIDE it, with the bank
+            // onset near x 4.5+ dipping the rolled envelope further south. At z 1.05 everything
+            // closed clears by >=0.15m (still on the platform, 0.33m south of the lap-bar tiles).
             var gateRoot = new GameObject("Gates");
-            gateRoot.transform.position = new Vector3(0, 0.5f, 1.2f);
+            gateRoot.transform.position = new Vector3(0, 0.5f, 1.05f);
             var gatePrefab = Prop("StationGate.fbx");
             if (gatePrefab != null)
             {
@@ -1121,6 +1193,14 @@ namespace ParkShift.EditorTools
                     var gd = unit.AddComponent<GateUnitDriver>();
                     gd.DoorL = FindDeep(unit.transform, "GateDoorL");
                     gd.DoorR = FindDeep(unit.transform, "GateDoorR");
+                    // de-overlap: swing flipped SOUTH and trimmed to 80 deg (driver default was
+                    // L-100/R+100). With the FBX leaf axes the default swung the 1.05m leaves
+                    // NORTH past perpendicular — open door tips reached z ~2.2, through the
+                    // parked train's flank (train side z 1.45). Flipped they open toward the
+                    // guest side; 80 deg keeps the springy ease-out-back overshoot (~88 deg)
+                    // clear of the podium heads and of guests waiting at the unit-center marks.
+                    gd.OpenEulerL = new Vector3(0, 0, 80f);
+                    gd.OpenEulerR = new Vector3(0, 0, -80f);
                 }
                 gateRoot.AddComponent<GateVisual>().GatePanels = new Transform[0]; // sim mirror handled by drivers
             }
@@ -1194,14 +1274,23 @@ namespace ParkShift.EditorTools
                 var console = PlaceProp(consolePrefab, "DispatchConsole", new Vector3(10.1f, 0.1f, -3.4f));
                 var lever = FindDeep(console.transform, "GateLever");
                 var button = FindDeep(console.transform, "DispatchButton");
-                AddInteractor(lever, PanelInteractable.Kind.GateLever, new Vector3(0.3f, 0.3f, 0.55f));
+                // de-overlap: gate-lever trigger resized (0.3,0.3,0.55)->(0.26,0.18,0.44) and
+                // recentred (0,0.06,0.15) — up the handle and toward the operator. The old box
+                // was centered on the floor-level pivot and its OBB interpenetrated the HMI
+                // screen trigger 0.29m (screen sits directly above/behind the lever slot), so
+                // aiming at one could hit the other. Both boxes still cover their meshes.
+                AddInteractor(lever, PanelInteractable.Kind.GateLever, new Vector3(0.26f, 0.18f, 0.44f), new Vector3(0f, 0.06f, 0.15f));
                 AddInteractor(button, PanelInteractable.Kind.DispatchButton, new Vector3(0.28f, 0.28f, 0.28f));
                 var cd = console.AddComponent<ConsoleDriver>();
                 cd.Lever = lever; cd.Button = button;
                 // HMI screen: look at the little screen + press E to open the clickable ride menu.
                 // The Screen mesh origin sits at the console root, so the interactor is offset onto the screen.
+                // de-overlap: screen trigger shrunk (0.6,0.5,0.6)->(0.5,0.12,0.3), center depth
+                // -0.205 -> -0.24 — the old volume overlapped the gate-lever trigger (0.29m) and
+                // even the console's own dispatch-button trigger (0.01m). Now it hugs the screen
+                // slab (mesh x -0.39..0.03, y -0.251..-0.159, z 0.805..1.055) with clear gaps.
                 var screen = FindDeep(console.transform, "Screen");
-                AddInteractor(screen, PanelInteractable.Kind.HmiScreen, new Vector3(0.6f, 0.5f, 0.6f), new Vector3(-0.18f, -0.205f, 0.93f));
+                AddInteractor(screen, PanelInteractable.Kind.HmiScreen, new Vector3(0.5f, 0.12f, 0.3f), new Vector3(-0.18f, -0.24f, 0.93f));
                 Label(console, "GATES  |  DISPATCH  |  [E] HMI SCREEN", 1.5f);
             }
             else
@@ -1233,7 +1322,12 @@ namespace ParkShift.EditorTools
 
             // Zone-sensor reset button beside the dispatch console (BlockSensorGhost step 2:
             // refused until the operator has walked the course and verified the block on foot).
-            var sensorReset = Box("SensorResetButton", new Vector3(11.35f, 1.0f, -3.9f), new Vector3(0.24f, 0.24f, 0.24f), mDanger);
+            // de-overlap: raised y 1.0 -> 1.32 (moved from (11.35, 1.0, -3.9)) — it sat almost
+            // dead behind the dispatch push button from the operator's approach line, and the
+            // aim ray from any natural standing spot (eye ~1.6, z -1.0..-2.2) clipped the
+            // dispatch trigger (top y 1.25) before reaching it. At 1.32 the sightline passes
+            // over the dispatch volume from every tested spot.
+            var sensorReset = Box("SensorResetButton", new Vector3(11.35f, 1.32f, -3.9f), new Vector3(0.24f, 0.24f, 0.24f), mDanger);
             Object.DestroyImmediate(sensorReset.GetComponent<Collider>()); // trigger interactor replaces the primitive collider
             AddInteractor(sensorReset.transform, PanelInteractable.Kind.SensorReset, new Vector3(0.5f, 0.5f, 0.5f));
             Label(sensorReset, "SENSOR RESET", 0.5f);
@@ -1310,6 +1404,9 @@ namespace ParkShift.EditorTools
             Label(brownoutWarn, "BUS UNDERVOLT", 0.4f);
 
             // ---- Dropped item prop (near station edge) ----
+            // NOTE (de-overlap pass): intentionally INSIDE the berth sweep envelope — the whole
+            // fault is that a guest item blocks the train, and the sim refuses dispatch until
+            // it's cleared, so no moving train ever reaches it. The audit will list it.
             var item = Box("DroppedItem", new Vector3(5.5f, 0.65f, 1.6f), new Vector3(0.35f, 0.35f, 0.35f), mGate);
             item.AddComponent<PanelInteractable>().PanelKind = PanelInteractable.Kind.DroppedItem;
             item.AddComponent<InteractableGlow>();
@@ -1391,10 +1488,16 @@ namespace ParkShift.EditorTools
             // names the flagged car; checking the wrong car is refused by the sim). ----
             var lapBarRoot = new GameObject("LapBarCheckPoints");
             var lapBarAnchors = new Transform[4];
+            // de-overlap: check points slid west (x 1.65..4.35 -> 0.75..3.45), pulled to z 1.38
+            // and flattened into floor tiles (y 0.56 h 0.12 -> y 0.52 h 0.04, top 0.54 vs the
+            // platform's 0.5) — the old chunky pads poked 0.02m into the flat sweep envelope
+            // (base y 0.6), and east of x~3.5 the departure banking dips the rolled winglet
+            // corner to y~0.48/z~1.3 so ANY block there gets clipped. The trigger volumes still
+            // reach up to the parked cars (intended); only the solid visuals slimmed/moved.
             for (int carIdx = 0; carIdx < 4; carIdx++)
             {
-                float lx = 1.65f + 0.9f * carIdx; // spans the Load berth (train parks at x=+3)
-                var pt = Box($"LapBarCheck{carIdx}", new Vector3(lx, 0.56f, 1.5f), new Vector3(0.3f, 0.12f, 0.3f), mGate, lapBarRoot.transform);
+                float lx = 0.75f + 0.9f * carIdx; // spans the Load berth (train parks at x=+3)
+                var pt = Box($"LapBarCheck{carIdx}", new Vector3(lx, 0.52f, 1.38f), new Vector3(0.3f, 0.04f, 0.3f), mGate, lapBarRoot.transform);
                 Object.DestroyImmediate(pt.GetComponent<Collider>()); // trigger interactor replaces the primitive collider
                 AddInteractor(pt.transform, PanelInteractable.Kind.LapBarUnjam,
                     new Vector3(0.55f, 1.0f, 0.55f), new Vector3(0f, 0.45f, 0f));
@@ -1403,7 +1506,10 @@ namespace ParkShift.EditorTools
                 lapBarAnchors[carIdx] = pt.transform;
             }
             // Jam marker flag — FaultPropController snaps it to the flagged car's check point.
-            var jamFlag = MakeFaultFlag("JammedCarFlag", new Vector3(3f, 0.56f, 1.5f), 0f, 0.5f);
+            // de-overlap: rest pose follows the moved check-point row (was (3, 0.56, 1.5)).
+            // It sits inside the berth sweep on purpose: the flag only shows during
+            // RestraintJammedCar, when the train is parked at Load — the audit will list it.
+            var jamFlag = MakeFaultFlag("JammedCarFlag", new Vector3(3f, 0.52f, 1.38f), 0f, 0.5f);
             Label(jamFlag, "LAP BAR JAM", 1.3f);
 
             // Fault prop controller wiring
@@ -1491,12 +1597,17 @@ namespace ParkShift.EditorTools
             stationCtl.UnloadStopPoint = Marker("Station_Unload_StopPoint", new Vector3(-3f, 0.6f, 2.2f)).transform;
             stationCtl.LoadStopPoint   = Marker("Station_Load_StopPoint",   new Vector3( 3f, 0.6f, 2.2f)).transform;
 
+            // de-overlap: exit/entry marks re-spaced onto the gate-unit centers and the
+            // between-unit post gaps (unload -5/-3.4/-1.8 -> -4.5/-3.0/-1.5, load 1/2.6/4.2 ->
+            // 1.5/3.0/4.5) — the old marks put waiting guests inside the 1.05m door swing arcs
+            // (e.g. x 2.6 sat 0.5m from a hinge). Unit centers stay outside every leaf's swept
+            // sector, verified against the flipped 80-deg south swing incl. overshoot.
             var unloadExits = new List<Transform>();
             for (int e = 0; e < 3; e++)
-                unloadExits.Add(Marker($"Guest_Unload_ExitPoint_{e + 1:00}", new Vector3(-5f + e * 1.6f, 0f, 0.7f)).transform);
+                unloadExits.Add(Marker($"Guest_Unload_ExitPoint_{e + 1:00}", new Vector3(-4.5f + e * 1.5f, 0f, 0.7f)).transform);
             var loadEntries = new List<Transform>();
             for (int e = 0; e < 3; e++)
-                loadEntries.Add(Marker($"Guest_Load_EntryPoint_{e + 1:00}", new Vector3(1f + e * 1.6f, 0f, 0.7f)).transform);
+                loadEntries.Add(Marker($"Guest_Load_EntryPoint_{e + 1:00}", new Vector3(1.5f + e * 1.5f, 0f, 0.7f)).transform);
 
             stationCtl.UnloadGuestExitPoints = unloadExits.ToArray();
             stationCtl.LoadGuestEntryPoints  = loadEntries.ToArray();
@@ -1511,7 +1622,12 @@ namespace ParkShift.EditorTools
             Box("UnloadDoorFrameR", new Vector3(-4.55f, 1.1f, 0.5f), new Vector3(0.2f, 2.3f, 0.3f), mBooth, unloadDoorRoot.transform);
             Box("UnloadDoorHeader", new Vector3(-5.5f, 2.35f, 0.5f), new Vector3(2.1f, 0.25f, 0.3f), mBooth, unloadDoorRoot.transform);
             var unloadDoorPanel = Box("UnloadDoorPanel", new Vector3(-5.5f, 1.0f, 0.5f), new Vector3(1.7f, 1.9f, 0.12f), mGate, unloadDoorRoot.transform);
-            unloadDoorRoot.AddComponent<UnloadDoorDriver>().DoorPanel = unloadDoorPanel.transform;
+            var udd = unloadDoorRoot.AddComponent<UnloadDoorDriver>();
+            udd.DoorPanel = unloadDoorPanel.transform;
+            // de-overlap: open slide 2.2 -> 1.8 — at 2.2 the raised panel's top (y 4.15) punched
+            // 0.28m through the station RoofSlab (bottom y 3.875). At 1.8 it tops out at 3.75
+            // (0.125m clear) and the opening still gives 1.85m of head room.
+            udd.OpenOffset = new Vector3(0f, 1.8f, 0f);
             Label(unloadDoorRoot, "UNLOAD DOOR", 2.7f);
 
             // ---- Exit door (simple primitive; guests walk here then despawn) ----
@@ -1545,19 +1661,29 @@ namespace ParkShift.EditorTools
             //                               the release-to-load step, so it reads as confirm).
             // Positions stay clear of the unload door (x -6.45..-4.55 at z 0.5), the guest exit
             // markers (z 0.7) and the exit path (-5,0) -> (-7.5,-1.2) -> (-9.5,-2.6).
+            // de-overlap: whole trio relocated west of the maintenance ramp. The old arc —
+            // DoorOpen (-8.0,0,1.7), Restraint (-8.5,0,0.45), Confirm (-7.9,0,-0.6) — had
+            // DoorOpen standing INSIDE the final-brake-run sweep (z 1.7 vs envelope edge 1.25;
+            // head/trigger pen up to 0.63m against an arriving train) and the other two buried
+            // in RampMaint's plate (x -9.25..-7.05, z -1.5..1.2; plinths clipped up to 0.24m).
+            // New shallow arc sits on open ground just west of the ramp foot, keeps the
+            // Door -> Restraint -> Confirm walk order (N -> W -> S), faces sweep 150/100/50 deg
+            // toward the ramp base, every part+trigger clears the envelope by >=0.15m in z,
+            // head-to-head walking gaps are 0.97/0.95m, triggers never touch (min 0.45m apart),
+            // and the guest exit path keeps >=1.37m. Verified in the scratch sweep model.
             var mOccHull  = mSeat; // shared dark hull — no new near-black material needed
             var mOccAmber = GlowMat("PS_OccAmber", new Color(0.35f, 0.22f, 0.05f), new Color(1f, 0.62f, 0.10f), 2.2f);
             var mOccRed   = GlowMat("PS_OccRed",   new Color(0.30f, 0.06f, 0.06f), new Color(1f, 0.18f, 0.12f), 2.2f);
             var mOccGreen = GlowMat("PS_OccGreen", new Color(0.05f, 0.28f, 0.10f), new Color(0.25f, 1f, 0.35f), 2.2f);
             var occRoot = new GameObject("UnloadOpsConsoles");
             Transform occOpenCap, occReleaseCap, occCloseCap;
-            BuildOpsPedestal("OccConsole_DoorOpen", new Vector3(-8.0f, 0f, 1.7f), 120f,
+            BuildOpsPedestal("OccConsole_DoorOpen", new Vector3(-9.85f, 0f, 0.6f), 150f,
                 mOccHull, mOccAmber, PanelInteractable.Kind.UnloadDoorOpen, "OCC — DOOR OPEN",
                 false, occRoot.transform, out occOpenCap);
-            BuildOpsPedestal("OccConsole_RestraintRelease", new Vector3(-8.5f, 0f, 0.45f), 90f,
+            BuildOpsPedestal("OccConsole_RestraintRelease", new Vector3(-11.6f, 0f, 0.2f), 100f,
                 mOccHull, mOccRed, PanelInteractable.Kind.ReleaseRestraints, "OCC — RESTRAINT RELEASE",
                 true, occRoot.transform, out occReleaseCap);
-            BuildOpsPedestal("OccConsole_UnloadConfirm", new Vector3(-7.9f, 0f, -0.6f), 60f,
+            BuildOpsPedestal("OccConsole_UnloadConfirm", new Vector3(-10.45f, 0f, -1.5f), 50f,
                 mOccHull, mOccGreen, PanelInteractable.Kind.UnloadDoorClose, "OCC — UNLOAD CONFIRM",
                 false, occRoot.transform, out occCloseCap);
             // Same driver + press feedback as before — only the button transforms moved.
@@ -1671,7 +1797,10 @@ namespace ParkShift.EditorTools
                 cp.Intensity = 1.3f; cp.PulseAmount = 0.3f; cp.Speed = 0.8f; cp.Phase = Rnd(0f, 6.28f);
             };
             CrystalCluster("Crystals00", new Vector3(18.5f, 0, 0.5f));
-            CrystalCluster("Crystals01", new Vector3(-20f, 0, 14f));
+            // de-overlap: Crystals01 moved from (-20, 0, 14) — the diving turn home (WP48->49)
+            // passes right through that spot at rail y 1.0..1.7, and the 2.6m main spire stood
+            // 0.59m inside the sweep tube (env pen 0.37/0.40). New spot is 5.2m+ from any track.
+            CrystalCluster("Crystals01", new Vector3(-23.5f, 0, 11f));
             CrystalCluster("Crystals02", new Vector3(10f, 0, 25f));
             CrystalCluster("Crystals03", new Vector3(-6.5f, 0, -20f));
             CrystalCluster("Crystals04", new Vector3(23.5f, 0, 57f));   // beside the loop
