@@ -24,6 +24,7 @@ namespace ParkShift.UI
             _body = txt.GetComponent<Text>();
             _body.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             _body.fontSize = 26; _body.alignment = TextAnchor.UpperCenter; _body.color = Color.white;
+            ComicUI.Letter(_body);
             var brt = _body.rectTransform;
             brt.anchorMin = new Vector2(0, 0.18f); brt.anchorMax = Vector2.one;
             brt.offsetMin = new Vector2(20, 0); brt.offsetMax = new Vector2(-20, -20);
@@ -33,14 +34,18 @@ namespace ParkShift.UI
             var bb = btnGO.GetComponent<RectTransform>();
             bb.anchorMin = new Vector2(0.3f, 0.04f); bb.anchorMax = new Vector2(0.7f, 0.14f);
             bb.offsetMin = bb.offsetMax = Vector2.zero;
-            btnGO.GetComponent<Image>().color = new Color(0.9f, 0.45f, 0.1f);
+            btnGO.GetComponent<Image>().color = ComicUI.Gold;
             var bt = new GameObject("L", typeof(Text)); bt.transform.SetParent(btnGO.transform, false);
             var btx = bt.GetComponent<Text>();
             btx.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            btx.text = "NEXT SHIFT"; btx.alignment = TextAnchor.MiddleCenter; btx.fontSize = 24; btx.color = Color.black;
-            var btr = btx.rectTransform; btr.anchorMin = Vector2.zero; btr.anchorMax = Vector2.one;
+            btx.text = Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo ? "NEXT SHIFT" : "LEAVE SESSION"; btx.alignment = TextAnchor.MiddleCenter; btx.fontSize = 24; btx.color = Color.black;
+            var btr = btx.rectTransform; btr.anchorMin = Vector2.zero; btr.anchorMax = Vector2.one; btr.offsetMin = btr.offsetMax = Vector2.zero;
             btnGO.GetComponent<Button>().onClick.AddListener(() =>
-                SceneManager.LoadScene(SceneManager.GetActiveScene().name));
+            {
+                if (Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo)
+                    SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+                else Networking.NetworkBootstrap.LeaveSession();
+            });
 
             _panel.SetActive(false);
         }
@@ -63,6 +68,13 @@ namespace ParkShift.UI
                 $"SCORE: {score}\n{grade}";
             _panel.SetActive(true);
             Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            var role = ParkShift.Player.RoleController.Local;
+            var fps = role != null ? role.GetComponent<ParkShift.Player.FirstPersonController>() : null;
+            if (fps != null) fps.InputEnabled = false;
         }
     }
 }
+
+
+

@@ -36,7 +36,13 @@ namespace ParkShift.Attraction
                 case Kind.RestraintCheck:
                 {
                     var t = S.PlatformTrain();
-                    if (t != null && t.Riders > 0 && !t.RestraintsVerified) return "Check restraints";
+                    if (t != null && t.Riders > 0 && !t.RestraintsVerified)
+                    {
+                        if (S.Guests.GatesOpen) return "Close boarding gates before checking bars";
+                        if (S.Faults.HasFault(FaultType.RestraintJammedCar)) return "Free the flagged lap bar first";
+                        if (S.Faults.HasFault(FaultType.RestraintNotVerified)) return "Inspect the flagged seat first";
+                        return "Tug lap bars and verify restraints";
+                    }
                     return null;
                 }
                 case Kind.DispatchButton:
@@ -52,8 +58,10 @@ namespace ParkShift.Attraction
                     if (!role.CanUseMaintenance) return "LOTO lever (Technician only — Tab to switch)";
                     return S.LotoEngaged ? "Release LOTO + remove tag" : "Pull LOTO lever + hang tag";
                 case Kind.MaintenancePanel:
-                    if (!S.Faults.HasFault(FaultType.MaintenanceResetRequired)) return null;
+                    if (!S.Faults.HasFault(FaultType.MaintenanceResetRequired) && !S.Faults.HasFault(FaultType.TrainCollision)) return null;
                     if (!role.CanUseMaintenance) return "Maintenance reset (Technician only — Tab)";
+                    var collision = S.Faults.Find(FaultType.TrainCollision);
+                    if (collision != null && !collision.Inspected) return "Inspect the collision contact point first";
                     return S.LotoEngaged ? "Reset drive controller" : "Reset refused — LOTO required";
                 case Kind.AssistantPhone:
                     return S.Faults.Active.Count > 0 && M.AssistantRemaining <= 0f
@@ -75,10 +83,14 @@ namespace ParkShift.Attraction
                     return S.UnloadDoorOpen ? null : "Open unload door";
                 case Kind.UnloadDoorClose:
                     if (!S.UnloadDoorOpen) return null;
-                    return S.UnloadAreaClear ? "Close unload door" : "Close door — wait for guests to clear";
+                    if (!S.UnloadAreaClear) return "Wait for guests to clear the exit";
+                    return UnloadDoorDriver.Instance != null && !UnloadDoorDriver.Instance.CanClose
+                        ? "Doorway occupied — stand clear" : "Close unload door";
                 case Kind.ReleaseRestraints:
                     if (S.UnloadingTrain() == null || S.RestraintsReleased) return null;
-                    return S.UnloadDoorOpen ? "Release restraints" : "Release restraints — open the door first";
+                    if (!S.UnloadDoorOpen) return "Release restraints — open the door first";
+                    return UnloadDoorDriver.Instance != null && !UnloadDoorDriver.Instance.IsFullyOpen
+                        ? "Wait for the unload door to finish opening" : "Release restraints";
                 case Kind.HmiScreen:
                     return UI.HmiPanel.IsOpen ? "Close HMI" : "Read ride HMI / add RVs";
                 case Kind.BlockVerify:
@@ -110,8 +122,29 @@ namespace ParkShift.Attraction
             return null;
         }
 
+        public float HoldSeconds(RoleController role)
+        {
+            if (M == null || role == null) return 0f;
+            switch (PanelKind)
+            {
+                case Kind.RestraintCheck:
+                    return !S.Guests.GatesOpen && !S.Faults.HasFault(FaultType.RestraintNotVerified)
+                        && !S.Faults.HasFault(FaultType.RestraintJammedCar) ? 1.2f : 0f;
+                case Kind.SeatInspect: case Kind.BlockVerify: return 1.5f;
+                case Kind.DroppedItem: return 0.65f;
+                case Kind.LapBarUnjam: return 1.8f;
+                case Kind.IntruderEscort: case Kind.CollisionInspect:
+                    return role.CanUseMaintenance ? 2f : 0f;
+                case Kind.MaintenancePanel: case Kind.WinchPanel:
+                    return role.CanUseMaintenance && S.LotoEngaged ? 2f : 0f;
+                case Kind.BrownoutStage: return role.CanUseMaintenance ? 1f : 0f;
+                default: return 0f;
+            }
+        }
+
         public void Interact(RoleController role)
         {
+            if (M == null || role == null || string.IsNullOrEmpty(GetPrompt(role))) return;
             switch (PanelKind)
             {
                 case Kind.ShiftStart: M.Submit(OpVerb.OpenShift); break;

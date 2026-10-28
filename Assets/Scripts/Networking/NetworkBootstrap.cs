@@ -4,58 +4,100 @@ namespace ParkShift.Networking
 {
     public enum NetMode { Solo, Host, Client }
 
-    /// <summary>
-    /// Multiplayer entry point. Architecture decided day one:
-    /// host-authoritative listen server over FishNet; AttractionSim runs only on the
-    /// server; clients send verbs via ServerRpc and mirror replicated state.
-    ///
-    /// When the FishNet package is present, the FISHNET define (set via asmdef
-    /// versionDefines) activates the real networking path. Without it, the same code
-    /// compiles and Host/Client gracefully fall back to a local session so the slice
-    /// is always runnable.
-    /// </summary>
+    /// <summary>Explicit LAN entry point. Missing networking never impersonates a connected session.</summary>
     public class NetworkBootstrap : MonoBehaviour
     {
         public static NetMode Mode = NetMode.Solo;
+        public static string Address = "localhost";
+        public const ushort Port = 7770;
+        public static string ConnectionStatus { get; private set; } = "Solo";
+
+        public static void LeaveSession()
+        {
+#if FISHNET
+            var network = FishNet.InstanceFinder.NetworkManager;
+            if (network != null)
+            {
+                network.ClientManager.StopConnection();
+                network.ServerManager.StopConnection(true);
+            }
+#endif
+            Mode = NetMode.Solo;
+            ConnectionStatus = "Solo";
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu");
+        }
+
+        void OnGUI()
+        {
+            if (Mode == NetMode.Solo) return;
+            bool noPlayer = Player.RoleController.Local == null;
+            if (!noPlayer) return;
+            GUILayout.BeginArea(new Rect(16, 16, 390, noPlayer ? 130 : 58), GUI.skin.box);
+            GUILayout.Label(ConnectionStatus);
+            if (noPlayer)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                GUILayout.Label("LAN: UDP port 7770 • maximum four crew");
+                if (GUILayout.Button("RETURN TO MENU")) LeaveSession();
+            }
+            GUILayout.EndArea();
+        }
+
+        void Awake()
+        {
+            var manager = FindObjectOfType<Attraction.AttractionManager>();
+            if (manager != null) manager.IsAuthoritative = Mode == NetMode.Solo;
+        }
 
         void Start()
         {
-            var mgr = Attraction.AttractionManager.Instance;
-
+            var manager = Attraction.AttractionManager.Instance;
+            if (Mode == NetMode.Solo) { manager.IsAuthoritative = true; ConnectionStatus = "Solo"; return; }
 #if FISHNET
-            var nm = FishNet.InstanceFinder.NetworkManager;
-            if (nm == null)
+            var network = FishNet.InstanceFinder.NetworkManager;
+            if (network == null)
             {
-                Debug.LogWarning("[Net] No FishNet NetworkManager in scene — add the FishNet " +
-                                 "NetworkManager prefab (Tugboat transport). Falling back to local.");
-                mgr.IsAuthoritative = true;
+                ConnectionStatus = "LAN scene setup missing. Rebuild the prototype scene.";
+                Debug.LogError(ConnectionStatus);
                 return;
             }
-            switch (Mode)
+            network.TransportManager.Transport.SetPort(Port);
+            network.TransportManager.Transport.SetMaximumClients(4);
+            network.ClientManager.OnClientConnectionState += OnClientState;
+            if (Mode == NetMode.Host)
             {
-                case NetMode.Host:
-                    nm.ServerManager.StartConnection();
-                    nm.ClientManager.StartConnection();
-                    mgr.IsAuthoritative = true;
-                    Debug.Log("[Net] Hosting on Tugboat (default port 7770). " +
-                              "Steam Relay: see Assets/Scripts/Networking/NETWORKING.md");
-                    break;
-                case NetMode.Client:
-                    nm.ClientManager.StartConnection("localhost");
-                    mgr.IsAuthoritative = false; // server owns the sim
-                    Debug.Log("[Net] Joining localhost...");
-                    break;
-                default:
-                    mgr.IsAuthoritative = true;
-                    break;
+                ConnectionStatus = "Starting four-player LAN host...";
+                network.ServerManager.StartConnection();
+                network.ClientManager.StartConnection("localhost");
+            }
+            else
+            {
+                ConnectionStatus = "Connecting to " + Address + ":" + Port;
+                network.ClientManager.StartConnection(Address);
             }
 #else
-            if (Mode != NetMode.Solo)
-                Debug.LogWarning("[Net] FishNet package not installed yet — Host/Join run as a " +
-                                 "local session. Install com.firstgeargames.fishnet (already in " +
-                                 "manifest.json) and the FISHNET define activates automatically.");
-            mgr.IsAuthoritative = true;
+            ConnectionStatus = "FishNet package unavailable. LAN is disabled.";
+            Debug.LogError(ConnectionStatus);
 #endif
         }
+
+#if FISHNET
+        void OnClientState(FishNet.Transporting.ClientConnectionStateArgs args)
+        {
+            ConnectionStatus = args.ConnectionState == FishNet.Transporting.LocalConnectionState.Started
+                ? (Mode == NetMode.Host ? "LAN host • up to four crew" : "Connected to " + Address)
+                : "LAN connection: " + args.ConnectionState;
+        }
+        void OnDestroy()
+        {
+            var network = FishNet.InstanceFinder.NetworkManager;
+            if (network != null) network.ClientManager.OnClientConnectionState -= OnClientState;
+        }
+#endif
     }
 }
+
+

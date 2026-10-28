@@ -69,9 +69,14 @@ namespace ParkShift.Core.Testing
             RunUntil(sim, () => sim.Guests.QueueCount >= 4, 30f);
             sim.LoadPlatformTrain();
             Check(!sim.CanDispatch(out r) && r.Contains("Restraints"), "deny unverified");
-            sim.VerifyRestraints();
-            Check(!sim.CanDispatch(out r) && r.Contains("gates"), "deny gates open");
+            Check(!sim.VerifyRestraints(), "cannot verify while gates open");
             sim.SetGates(false);
+            Check(sim.VerifyRestraints(), "verify after gates close");
+            Check(!sim.VerifyRestraints(), "reject repeated verification");
+            sim.SetGates(true);
+            Check(!sim.PlatformTrain().RestraintsVerified && !sim.CanDispatch(out r), "reopening gates invalidates restraint check");
+            sim.SetGates(false);
+            Check(sim.VerifyRestraints(), "recheck required after reopening");
             Check(sim.CanDispatch(out r), "allow when ready: " + r);
             Check(sim.Dispatch(), "dispatch succeeds");
             Check(sim.Trains[0].State == TrainState.Running, "train running");
@@ -90,7 +95,7 @@ namespace ParkShift.Core.Testing
             Check(sim.Faults.HasFault(FaultType.BlockOccupiedStacking), "stacking fault latched");
             // Now run the platform: load, verify, dispatch -> station frees -> hold clears
             RunUntil(sim, () => sim.Guests.QueueCount >= 2, 30f);
-            sim.LoadPlatformTrain(); sim.VerifyRestraints(); sim.SetGates(false);
+            sim.LoadPlatformTrain(); sim.SetGates(false); sim.VerifyRestraints();
             Check(sim.Dispatch(), "platform dispatch clears path");
             RunUntil(sim, () => !sim.Faults.HasFault(FaultType.BlockOccupiedStacking), 30f);
             Check(!sim.Faults.HasFault(FaultType.BlockOccupiedStacking), "stacking fault auto-clears");
@@ -147,13 +152,25 @@ namespace ParkShift.Core.Testing
 
             Check(!sim.ReleaseRestraints(), "release blocked while the door is closed");
             Check(sim.OpenUnloadDoor(), "operator opens the unload door");
+            sim.UnloadDoorReadyToRelease = () => false;
+            Check(!sim.ReleaseRestraints() && rv.Riders > 0, "wait for physical door travel before release");
+            sim.UnloadDoorReadyToRelease = () => true;
             Check(sim.ReleaseRestraints(), "operator releases restraints");
             Check(rv.Riders == 0, "riders drop on release");
             Check(!sim.CloseUnloadDoor(), "door cannot close mid-unload");
 
             RunUntil(sim, () => sim.UnloadAreaClear, 5f);
             Check(sim.UnloadAreaClear, "unload area clears after the unload time");
+            sim.Tick(2f);
+            Check(rv.State == TrainState.InStationUnloading, "RV remains parked after guests clear while door is open");
+            sim.UnloadDoorClearToClose = () => false;
+            Check(!sim.CloseUnloadDoor(), "physical doorway obstruction prevents closing");
+            sim.UnloadDoorClearToClose = () => true;
+            sim.UnloadDoorReadyToDepart = () => false;
             Check(sim.CloseUnloadDoor(), "door closes once guests have cleared");
+            sim.Tick(2f);
+            Check(rv.State == TrainState.InStationUnloading, "RV waits for physical closing travel");
+            sim.UnloadDoorReadyToDepart = () => true;
 
             RunUntil(sim, () => rv.CurrentBlock == 1, 30f);
             Check(rv.CurrentBlock == 1, "RV crawls Unload -> Load once clear");
@@ -430,6 +447,187 @@ namespace ParkShift.Core.Testing
                   "stalled platform drains satisfaction");
         }
 
+        public static void Test_ManagerShiftResources()
+        {
+            _current = nameof(Test_ManagerShiftResources);
+            var sim = NewSim(c => { c.TrainCount = 1; c.RandomFaultChancePerSecond = 0f; });
+            sim.Guests.Penalize(40f);
+            sim.EngageLoto(true);
+            Check(sim.Management.OfferGuestCare(), "guest care succeeds during a breakdown");
+            Check(sim.Management.Budget == 80 && sim.Guests.Satisfaction == 78f, "care spends budget and restores mood");
+            Check(!sim.Management.OfferGuestCare() && sim.Management.Budget == 80, "cooldown rejects duplicate spending");
+            Check(sim.LotoEngaged && !sim.RidePowered, "manager action never bypasses lockout");
+            sim.Management.ToggleAdmissions();
+            sim.Tick(10f);
+            Check(sim.Guests.QueueCount == 0, "paused admissions stop arrivals");
+            sim.Management.ToggleAdmissions();
+            sim.Tick(0.1f);
+            Check(sim.Guests.QueueCount == 0, "paused arrivals do not accumulate a reopening burst");
+            sim.Tick(30f);
+            Check(sim.Management.GuestCareCooldownRemaining == 0f, "care cooldown expires with sim time");
+            sim.Management.EarnRevenue(8);
+            Check(sim.Management.Budget == 120 && sim.Management.Revenue == 40, "served riders fund management");
+            var revenueSim = NewSim(c => { c.TrainCount = 1; c.BlockTraverseSeconds = 0.5f; });
+            revenueSim.PlatformTrain().Board(4);
+            revenueSim.VerifyRestraints();
+            Check(revenueSim.Dispatch(), "revenue test dispatches safely");
+            Check(revenueSim.Management.Revenue == 0, "dispatch alone does not earn revenue");
+            RunUntil(revenueSim, () => revenueSim.Score.RidersServed == 4, 40f);
+            Check(revenueSim.Management.Revenue == 20 && revenueSim.Management.Budget == 140, "completed ride earns revenue once");
+            revenueSim.Tick(1f);
+            Check(revenueSim.Management.Revenue == 20, "station tick never repeats revenue");
+            var closed = new AttractionSim(new SimConfig());
+            Check(!closed.Management.ToggleAdmissions() && !closed.Management.OfferGuestCare(), "closed shift rejects management actions");
+            var ended = NewSim(c => c.ShiftLengthSeconds = 1f);
+            ended.Tick(1f);
+            Check(!ended.Management.ToggleAdmissions() && !ended.Management.OfferGuestCare(), "ended shift rejects management actions");
+        }
+
+        public static void Test_QueueCapacityNoArrivalDebt()
+        {
+            _current = nameof(Test_QueueCapacityNoArrivalDebt);
+            var guests = new GuestSim(new SimConfig { QueueCapacity = 2, GuestSpawnInterval = 1f });
+            guests.Tick(100f, false);
+            guests.SetGates(true);
+            Check(guests.Board(2) == 2, "full queue boards existing guests");
+            guests.Tick(0.1f, false);
+            Check(guests.QueueCount == 0, "full queue does not bank phantom arrivals");
+            guests.Tick(1f, false);
+            Check(guests.QueueCount == 1, "normal arrivals resume after capacity frees");
+        }
+        public static void Test_LateJoinSnapshot()
+        {
+            _current = nameof(Test_LateJoinSnapshot);
+            var score = new ScoreSystem();
+            score.MirrorSnapshot(64, 14, 3, 12.5f, 30, 0, 7, 160);
+            Check(score.Dispatches == 14 && score.CurrentStreak == 0 && score.BestStreak == 7,
+                "late join after broken streak preserves dispatch total and best");
+            int expected = 640 + 75 + 160 + 400 - 25 - 30;
+            Check(score.Compute(80) == expected, "client score includes replicated downtime");
+            score.MirrorSnapshot(64, 14, 3, 12.5f, 30, 0, 7, 160);
+            Check(score.Compute(80) == expected && score.Dispatches == 14, "repeated snapshot is idempotent");
+            var sim = NewSim();
+            var train = sim.Trains[0];
+            train.MirrorPose(2, 0.4f, TrainState.Running, 0.2f);
+            train.MirrorOccupants(8, true);
+            Check(train.Riders == 8 && train.RestraintsVerified && train.State == TrainState.Running,
+                "late joining riders appear on a running train without boarding side effects");
+            train.MirrorOccupants(0, false);
+            Check(train.Riders == 0 && !train.RestraintsVerified && train.CurrentBlock == 2,
+                "unload snapshot clears riders without moving the train");
+        }
+
+        public static void Test_AutoOperatorSplitStation()
+        {
+            _current = nameof(Test_AutoOperatorSplitStation);
+            var sim = NewSim(c =>
+            {
+                c.SeparateLoadUnload = true;
+                c.BlockCount = 5;
+                c.TrainCount = 2;
+                c.BlockTraverseSeconds = 2f;
+                c.GuestSpawnInterval = 0.4f;
+                c.ShiftLengthSeconds = 180f;
+                c.TimedFaultsEnabled = true;
+            });
+            var auto = new AutoOperator(sim) { Enabled = true };
+            bool sawWalkingGuests = false;
+            bool sawClosedAfterUnload = false;
+            int missedDeadlines = 0;
+            sim.Faults.OnDeadlineMissed += f => missedDeadlines++;
+            for (int i = 0; i < 1801; i++)
+            {
+                if (i == 200) sim.Faults.Trigger(FaultType.GateSensorFault, sim.SimTime);
+                if (i == 900) sim.Faults.Trigger(FaultType.GuestDroppedItem, sim.SimTime);
+                auto.Tick(0.1f);
+                if (sim.GuestsUnloading)
+                {
+                    sawWalkingGuests = true;
+                    Check(sim.UnloadDoorOpen && !sim.UnloadAreaClear, "unload door remains open while guests walk out");
+                }
+                if (sawWalkingGuests && !sim.UnloadDoorOpen) sawClosedAfterUnload = true;
+                sim.Tick(0.1f);
+            }
+            Check(sim.State == AttractionState.EndOfShift, "split auto shift completes");
+            Check(sawWalkingGuests && sawClosedAfterUnload, "auto operator performs complete unload cycle");
+            Check(sim.Score.RidersServed >= 16 && sim.Score.Dispatches >= 4, "split station sustains repeated service");
+            Check(sim.Management.Revenue == sim.Score.RidersServed * 5, "split completed riders fund manager exactly once");
+            Check(sim.Score.FaultsResolved >= 2 && missedDeadlines == 0,
+                "solo coverage repairs timed operator incidents without losing throughput");
+        }
+        public static void Test_TimedFaultFairness()
+        {
+            _current = nameof(Test_TimedFaultFairness);
+            var cfg = new SimConfig { TimedFaultsEnabled = true, ShiftLengthSeconds = 600f,
+                RandomFaultChancePerSecond = 100f, TechFaultChancePerSecond = 100f };
+            var faults = new FaultSystem(cfg, 123) { TechScenarioMode = true };
+            faults.Tick(1f, 1f);
+            Check(faults.Active.Count == 0, "opening breathing room");
+            faults.Tick(1f, 16f);
+            Check(faults.Active.Count == 1, "base and technician rolls produce only one repair");
+            var first = faults.Active[0];
+            int missed = 0;
+            faults.OnDeadlineMissed += f => missed++;
+            faults.Tick(200f, 216f);
+            faults.Tick(1f, 217f);
+            Check(first.DeadlineMissed && missed == 1, "deadline consequence fires once");
+            Check(faults.Active.Count == 1, "overdue fault never creates a pileup");
+            faults.MarkInspected(first.Def.Type); faults.MarkLoto(first.Def.Type);
+            Check(faults.Resolve(first.Def.Type), "overdue repair remains possible");
+            faults.Tick(1f, 218f);
+            Check(faults.Active.Count == 0, "recovery breathing room");
+            faults.Tick(1f, 230f);
+            Check(faults.Active.Count == 1, "challenge resumes after recovery");
+            var late = new FaultSystem(cfg, 123) { TechScenarioMode = true };
+            late.Tick(1f, 580f);
+            Check(late.Active.Count == 0, "no impossible last-second generated incident");
+            var alert = late.Trigger(FaultType.DispatchTimeout, 580f);
+            Check(alert.DeadlineAt == 0f, "condition alerts do not add competing repair deadlines");
+            var queuedAlerts = new FaultSystem(cfg, 123);
+            queuedAlerts.Trigger(FaultType.DispatchTimeout, 0f);
+            queuedAlerts.Trigger(FaultType.BlockOccupiedStacking, 0f);
+            queuedAlerts.Tick(1f, 16f);
+            Check(queuedAlerts.Active.Count == 3 && queuedAlerts.AnyBlocksDispatch,
+                "throughput alerts do not suppress all future repair incidents");
+            var remoteSeats = new FaultSystem(cfg, 999);
+            for (int i = 16; i < 400; i += 15)
+            {
+                remoteSeats.Tick(1f, i, false);
+                Check(!remoteSeats.HasFault(FaultType.RestraintNotVerified) && !remoteSeats.HasFault(FaultType.RestraintJammedCar),
+                    "no restraint deadline without a reachable occupied platform RV");
+                if (remoteSeats.Active.Count > 0)
+                {
+                    var type = remoteSeats.Active[0].Def.Type;
+                    remoteSeats.MarkLoto(type); remoteSeats.MarkInspected(type); remoteSeats.Resolve(type);
+                }
+            }
+            var sim = NewSim(c => c.TimedFaultsEnabled = true);
+            sim.PlatformTrain().Board(2);
+            sim.Faults.Trigger(FaultType.RestraintJammedCar, 0f);
+            Check(!sim.VerifyRestraints(), "jammed bar cannot be verified");
+            sim.Faults.Trigger(FaultType.MaintenanceResetRequired, 0f);
+            sim.Faults.Tick(80f, 80f);
+            Check(!sim.RidePowered && !sim.MaintenanceReset(), "deadline never bypasses lockout");
+        }
+        public static void Test_ResponseWindowMoodFairness()
+        {
+            _current = nameof(Test_ResponseWindowMoodFairness);
+            var sim = NewSim(c => { c.TimedFaultsEnabled = true; c.TrainCount = 1; c.DispatchTimeoutSeconds = 999f; });
+            sim.Management.ToggleAdmissions();
+            var fault = sim.Faults.Trigger(FaultType.TrainValleyed, 0f);
+            for (int i = 0; i < 100; i++) sim.Tick(1f);
+            Check(sim.Guests.Satisfaction > 60f, "100 seconds of allowed response travel does not exhaust mood without a queue");
+            sim.Tick(11f);
+            float before = sim.Guests.Satisfaction;
+            sim.Tick(1f);
+            Check(fault.DeadlineMissed && before - sim.Guests.Satisfaction > 1.3f,
+                "full emergency and stall drain resumes after deadline");
+            var guests = new GuestSim(new SimConfig { GuestSpawnInterval = 1f, SatisfactionDrainPerQueued = 1f });
+            guests.Tick(2f, false);
+            float queueBefore = guests.Satisfaction;
+            guests.Tick(1f, false, 0f, true, 0.15f);
+            Check(queueBefore - guests.Satisfaction == 2f, "protected response never discounts queue waiting");
+        }
         public static int RunAll(Action<string> print)
         {
             Failures.Clear();
@@ -441,7 +639,8 @@ namespace ParkShift.Core.Testing
                 Test_DispatchTimeoutFault, Test_ScoreCalculation, Test_SoloTuning,
                 Test_FullShiftEndsAndTelemetry,
                 Test_BlockSensorGhostFault, Test_PowerBrownoutStagedRestart, Test_RestraintJamTargetsCar,
-                Test_EscalationRampAndSurge, Test_ComboScoringAndSatisfaction
+                Test_EscalationRampAndSurge, Test_ComboScoringAndSatisfaction, Test_ManagerShiftResources, Test_QueueCapacityNoArrivalDebt,
+                Test_LateJoinSnapshot, Test_AutoOperatorSplitStation, Test_TimedFaultFairness, Test_ResponseWindowMoodFairness
             };
             foreach (var t in tests) { t(); print($"  ran {t.Method.Name}"); }
             if (Failures.Count == 0) { print($"ALL {tests.Length} TESTS PASSED"); return 0; }
@@ -450,3 +649,8 @@ namespace ParkShift.Core.Testing
         }
     }
 }
+
+
+
+
+

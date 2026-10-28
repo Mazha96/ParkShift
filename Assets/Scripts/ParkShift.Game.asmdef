@@ -1,7 +1,7 @@
 {
   "name": "ParkShift.Game",
   "rootNamespace": "ParkShift",
-  "references": ["ParkShift.Core", "FishNet.Runtime", "Unity.Postprocessing.Runtime"],
+  "references": ["ParkShift.Core", "FishNet.Runtime", "Unity.Postprocessing.Runtime", "UnityEngine.UI"],
   "noEngineReferences": false,
   "autoReferenced": true,
   "versionDefines": [

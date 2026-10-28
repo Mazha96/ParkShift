@@ -14,6 +14,12 @@ namespace ParkShift.Tests
             Assert.IsEmpty(CoreTestSuite.Failures, string.Join("\n", CoreTestSuite.Failures));
         }
 
+        [Test] public void ManagerShiftResources() => Run(CoreTestSuite.Test_ManagerShiftResources);
+        [Test] public void LateJoinSnapshot() => Run(CoreTestSuite.Test_LateJoinSnapshot);
+        [Test] public void QueueCapacityNoArrivalDebt() => Run(CoreTestSuite.Test_QueueCapacityNoArrivalDebt);
+        [Test] public void AutoOperatorSplitStation() => Run(CoreTestSuite.Test_AutoOperatorSplitStation);
+        [Test] public void TimedFaultFairness() => Run(CoreTestSuite.Test_TimedFaultFairness);
+        [Test] public void ResponseWindowMoodFairness() => Run(CoreTestSuite.Test_ResponseWindowMoodFairness);
         [Test] public void StateTransitions() => Run(CoreTestSuite.Test_StateTransitions);
         [Test] public void BlockOccupancy() => Run(CoreTestSuite.Test_BlockOccupancy);
         [Test] public void DispatchRules() => Run(CoreTestSuite.Test_DispatchRules);
@@ -33,3 +39,7 @@ namespace ParkShift.Tests
         [Test] public void ComboScoringAndSatisfaction() => Run(CoreTestSuite.Test_ComboScoringAndSatisfaction);
     }
 }
+
+
+
+

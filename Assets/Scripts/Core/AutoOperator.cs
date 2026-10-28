@@ -27,6 +27,8 @@ namespace ParkShift.Core
             _cooldown -= dt;
             if (_cooldown > 0f) return;
 
+            if (TryServiceUnload()) { _cooldown = ActionCooldownSeconds; return; }
+
             if (TryFixMinorFault()) { _cooldown = ActionCooldownSeconds; return; }
 
             var t = _sim.PlatformTrain();
@@ -61,6 +63,19 @@ namespace ParkShift.Core
             }
         }
 
+        bool TryServiceUnload()
+        {
+            if (!_sim.Config.SeparateLoadUnload) return false;
+            // Never close on guests still walking out. The sim owns this interlock.
+            if (_sim.UnloadDoorOpen && _sim.UnloadAreaClear)
+                return _sim.CloseUnloadDoor();
+            var train = _sim.UnloadingTrain();
+            if (train == null || train.Riders == 0 || _sim.GuestsUnloading) return false;
+            if (!_sim.UnloadDoorOpen) return _sim.OpenUnloadDoor();
+            if (!_sim.RestraintsReleased) return _sim.ReleaseRestraints();
+            return false;
+        }
+
         /// <summary>Clears one operator-level fault per action beat (techs handle majors).</summary>
         bool TryFixMinorFault()
         {
@@ -85,3 +100,4 @@ namespace ParkShift.Core
         }
     }
 }
+

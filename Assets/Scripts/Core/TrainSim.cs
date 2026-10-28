@@ -159,6 +159,13 @@ namespace ParkShift.Core
             Speed = speed;
         }
 
+        /// <summary>Snapshot occupancy without running boarding/unload gameplay side effects.</summary>
+        public void MirrorOccupants(int riders, bool verified)
+        {
+            Riders = System.Math.Max(0, riders);
+            RestraintsVerified = verified;
+        }
+
         /// <summary>Legacy motion: instant full speed, hard stop at the block exit when gated.
         /// Kept byte-for-byte so the headless core tests stay deterministic.</summary>
         void StepInstant(float dt, float traverse, bool mayAdvance)

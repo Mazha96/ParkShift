@@ -19,6 +19,9 @@ namespace ParkShift.Juice
         public float MaxShakeOffset = 0.022f;
         [Tooltip("How quickly an FOV kick relaxes back to the base FOV.")]
         public float FovRelax = 6f;
+        [Tooltip("Additional FOV requested by locomotion. Set to zero to disable speed widening.")]
+        public float SpeedFov;
+        float _speedFov;
 
         float _trauma;
         float _fovKick;
@@ -69,11 +72,12 @@ namespace ParkShift.Juice
         {
             _trauma = Mathf.Max(0f, _trauma - TraumaDecay * Time.deltaTime);
             _fovKick = Mathf.Lerp(_fovKick, 0f, 1f - Mathf.Exp(-FovRelax * Time.deltaTime));
+            _speedFov = Mathf.Lerp(_speedFov, Mathf.Clamp(SpeedFov, 0f, 6f), 1f - Mathf.Exp(-5f * Time.deltaTime));
 
             if (_cam != null)
             {
                 if (_baseFov < 0f) _baseFov = _cam.fieldOfView;
-                _cam.fieldOfView = _baseFov + _fovKick;
+                _cam.fieldOfView = _baseFov + _fovKick + _speedFov;
             }
 
             float sh = _trauma * _trauma;

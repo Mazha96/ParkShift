@@ -52,6 +52,8 @@ namespace ParkShift.Core
         public float SatisfactionPerRider = 0.8f;         // gain per completed rider
         public float AssistantFixSeconds = 8f;            // "call remote tech" auto-fix delay
         public float TechFaultChancePerSecond = 0.03f;    // major incident rate while in tech scenario mode
+        public bool TimedFaultsEnabled = false;
+        public float IncidentRecoverySeconds = 12f;
 
         // ---- Extended fault catalog (off by default — behavior-preserving) ----
         /// <summary>When true, the three extended faults (block sensor ghost, power brownout,

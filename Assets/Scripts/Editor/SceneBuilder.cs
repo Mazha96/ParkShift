@@ -16,9 +16,8 @@ namespace ParkShift.EditorTools
     /// <summary>
     /// One-click scene construction from primitives. Run: menu ParkShift → Build All Scenes.
     /// Rebuildable at any time; scenes are throwaway artifacts, this script is the source of truth.
-    /// Visual direction (GALAXY EXPRESS): stylized flat-color low-poly park under a deep-space
-    /// night — near-black gradient skybox with dense stars and a big ringed planet, cool blue
-    /// moonlight key, indigo fog, cyan/magenta/purple neon, warm practicals around the station.
+    /// Visual direction (GALAXY EXPRESS): bright illustrated cosmic twilight, painted light
+    /// bands, geometry ink, a ringed planet and oversized candy-color park decorations.
     /// </summary>
     public static class SceneBuilder
     {
@@ -37,10 +36,12 @@ namespace ParkShift.EditorTools
             var m = AssetDatabase.LoadAssetAtPath<Material>(path);
             if (m == null)
             {
-                var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+                var shader = Shader.Find("ParkShift/CartoonSurface") ?? Shader.Find("Standard");
                 m = new Material(shader);
                 AssetDatabase.CreateAsset(m, path);
             }
+            var toon = Shader.Find("ParkShift/CartoonSurface");
+            if (toon != null) m.shader = toon;
             m.color = c;
             m.SetFloat("_Glossiness", smoothness);  // Standard
             if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", smoothness); // URP
@@ -545,9 +546,9 @@ namespace ParkShift.EditorTools
             sky.shader = shader;
             if (grad != null)
             {
-                sky.SetColor("_TopColor", new Color(0.006f, 0.007f, 0.018f));
-                sky.SetColor("_HorizonColor", new Color(0.10f, 0.10f, 0.28f));
-                sky.SetColor("_BottomColor", new Color(0.012f, 0.010f, 0.028f));
+                sky.SetColor("_TopColor", new Color(0.12f, 0.18f, 0.42f));
+                sky.SetColor("_HorizonColor", new Color(0.94f, 0.53f, 0.44f));
+                sky.SetColor("_BottomColor", new Color(0.32f, 0.30f, 0.48f));
                 sky.SetFloat("_HorizonHeight", 0.0f);
                 sky.SetFloat("_HorizonFalloff", 2.2f);
                 sky.SetFloat("_StarDensity", 0.85f);
@@ -577,14 +578,14 @@ namespace ParkShift.EditorTools
             RenderSettings.skybox = sky;
             RenderSettings.sun = sun;
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.19f, 0.21f, 0.38f);
-            RenderSettings.ambientEquatorColor = new Color(0.11f, 0.10f, 0.24f);
-            RenderSettings.ambientGroundColor = new Color(0.05f, 0.05f, 0.11f);
+            RenderSettings.ambientSkyColor = new Color(0.50f, 0.60f, 0.80f);
+            RenderSettings.ambientEquatorColor = new Color(0.43f, 0.34f, 0.52f);
+            RenderSettings.ambientGroundColor = new Color(0.22f, 0.20f, 0.30f);
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Linear;
-            RenderSettings.fogStartDistance = 55f;
-            RenderSettings.fogEndDistance = 210f;
-            RenderSettings.fogColor = new Color(0.05f, 0.06f, 0.15f);
+            RenderSettings.fogStartDistance = 85f;
+            RenderSettings.fogEndDistance = 270f;
+            RenderSettings.fogColor = new Color(0.34f, 0.36f, 0.61f);
             return sky;
         }
 
@@ -595,10 +596,10 @@ namespace ParkShift.EditorTools
             var sun = new GameObject("Sun").AddComponent<Light>();
             sun.type = LightType.Directional;
             sun.transform.rotation = Quaternion.Euler(32f, -30f, 0);
-            sun.intensity = 0.5f;
-            sun.color = new Color(0.60f, 0.70f, 1f);
+            sun.intensity = 1.15f;
+            sun.color = new Color(1f, 0.88f, 0.72f);
             sun.shadows = LightShadows.Soft;
-            sun.shadowStrength = 0.6f;
+            sun.shadowStrength = 0.75f;
             return sun;
         }
 
@@ -729,7 +730,8 @@ namespace ParkShift.EditorTools
             // open scene here). Best-effort: an audit failure must never break a scene build.
             try { SceneAudit.RunAudit(); }
             catch (System.Exception e) { Debug.LogWarning("[SceneAudit] post-build audit failed: " + e.Message); }
-            EditorUtility.DisplayDialog("ParkShift", "Scenes built.\nOpen Assets/Scenes/PrototypeAttraction.unity and press Play,\nor play MainMenu for the menu flow.", "OK");
+            if (!Application.isBatchMode)
+                EditorUtility.DisplayDialog("ParkShift", "Scenes built.\nOpen Assets/Scenes/PrototypeAttraction.unity and press Play,\nor play MainMenu for the menu flow.", "OK");
         }
 
         static void BuildMainMenu()
@@ -1221,7 +1223,8 @@ namespace ParkShift.EditorTools
             // grape roof, cyan trim and a warm interior point light ----
             Box("BoothFloor", new Vector3(10, 0.05f, -3), new Vector3(6, 0.1f, 5), mBooth);
             Box("BoothWall", new Vector3(10, 1.2f, -5.4f), new Vector3(6, 2.4f, 0.2f), mBooth);
-            Box("BoothWallL", new Vector3(7.15f, 0.75f, -3f), new Vector3(0.18f, 1.5f, 5f), mBooth);
+            // Keep the rear wall footprint, but open its north end onto the booth ramp.
+            Box("BoothWallL", new Vector3(7.15f, 0.75f, -3.675f), new Vector3(0.18f, 1.5f, 3.65f), mBooth);
             Box("BoothWallR", new Vector3(12.85f, 0.75f, -3f), new Vector3(0.18f, 1.5f, 5f), mBooth);
             Box("BoothRoof", new Vector3(10, 2.75f, -3f), new Vector3(6.6f, 0.16f, 5.6f), mRoof);
             foreach (var bp in new[] { new Vector3(7.15f, 1.7f, -0.62f), new Vector3(12.85f, 1.7f, -0.62f),
@@ -1280,17 +1283,22 @@ namespace ParkShift.EditorTools
                 // screen trigger 0.29m (screen sits directly above/behind the lever slot), so
                 // aiming at one could hit the other. Both boxes still cover their meshes.
                 AddInteractor(lever, PanelInteractable.Kind.GateLever, new Vector3(0.26f, 0.18f, 0.44f), new Vector3(0f, 0.06f, 0.15f));
-                AddInteractor(button, PanelInteractable.Kind.DispatchButton, new Vector3(0.28f, 0.28f, 0.28f));
+                // Fit the cap itself: a cube around its pivot also covered the HMI screen.
+                var buttonMesh = button != null ? button.GetComponent<MeshFilter>() : null;
+                var buttonBounds = buttonMesh != null && buttonMesh.sharedMesh != null
+                    ? buttonMesh.sharedMesh.bounds : new Bounds(Vector3.zero, Vector3.one * 0.14f);
+                AddInteractor(button, PanelInteractable.Kind.DispatchButton, buttonBounds.size, buttonBounds.center);
                 var cd = console.AddComponent<ConsoleDriver>();
                 cd.Lever = lever; cd.Button = button;
                 // HMI screen: look at the little screen + press E to open the clickable ride menu.
-                // The Screen mesh origin sits at the console root, so the interactor is offset onto the screen.
-                // de-overlap: screen trigger shrunk (0.6,0.5,0.6)->(0.5,0.12,0.3), center depth
-                // -0.205 -> -0.24 — the old volume overlapped the gate-lever trigger (0.29m) and
-                // even the console's own dispatch-button trigger (0.01m). Now it hugs the screen
-                // slab (mesh x -0.39..0.03, y -0.251..-0.159, z 0.805..1.055) with clear gaps.
+                // The mesh origin sits at the console root. Fit its actual slab bounds;
+                // the former padded and offset box still reached the adjacent button cap.
                 var screen = FindDeep(console.transform, "Screen");
-                AddInteractor(screen, PanelInteractable.Kind.HmiScreen, new Vector3(0.5f, 0.12f, 0.3f), new Vector3(-0.18f, -0.24f, 0.93f));
+                var screenMesh = screen != null ? screen.GetComponent<MeshFilter>() : null;
+                var screenBounds = screenMesh != null && screenMesh.sharedMesh != null
+                    ? screenMesh.sharedMesh.bounds
+                    : new Bounds(new Vector3(-0.18f, -0.205f, 0.93f), new Vector3(0.42f, 0.092f, 0.25f));
+                AddInteractor(screen, PanelInteractable.Kind.HmiScreen, screenBounds.size, screenBounds.center);
                 Label(console, "GATES  |  DISPATCH  |  [E] HMI SCREEN", 1.5f);
             }
             else
@@ -1499,8 +1507,11 @@ namespace ParkShift.EditorTools
                 float lx = 0.75f + 0.9f * carIdx; // spans the Load berth (train parks at x=+3)
                 var pt = Box($"LapBarCheck{carIdx}", new Vector3(lx, 0.52f, 1.38f), new Vector3(0.3f, 0.04f, 0.3f), mGate, lapBarRoot.transform);
                 Object.DestroyImmediate(pt.GetComponent<Collider>()); // trigger interactor replaces the primitive collider
+                // Keep the usable volume in world metres despite the thin tile's scale.
+                Vector3 scale = pt.transform.lossyScale;
                 AddInteractor(pt.transform, PanelInteractable.Kind.LapBarUnjam,
-                    new Vector3(0.55f, 1.0f, 0.55f), new Vector3(0f, 0.45f, 0f));
+                    new Vector3(0.55f / scale.x, 1f / scale.y, 0.55f / scale.z),
+                    new Vector3(0f, 0.45f / scale.y, 0f));
                 pt.GetComponent<PanelInteractable>().CarIndex = carIdx;
                 Label(pt, "CAR " + (carIdx + 1), 0.55f);
                 lapBarAnchors[carIdx] = pt.transform;
@@ -1618,16 +1629,15 @@ namespace ParkShift.EditorTools
             // ---- Unload door (operator-controlled gate guests leave through) ----
             var unloadDoorRoot = new GameObject("UnloadDoor");
             unloadDoorRoot.transform.position = new Vector3(-5.5f, 0f, 0.5f);
-            Box("UnloadDoorFrameL", new Vector3(-6.45f, 1.1f, 0.5f), new Vector3(0.2f, 2.3f, 0.3f), mBooth, unloadDoorRoot.transform);
-            Box("UnloadDoorFrameR", new Vector3(-4.55f, 1.1f, 0.5f), new Vector3(0.2f, 2.3f, 0.3f), mBooth, unloadDoorRoot.transform);
-            Box("UnloadDoorHeader", new Vector3(-5.5f, 2.35f, 0.5f), new Vector3(2.1f, 0.25f, 0.3f), mBooth, unloadDoorRoot.transform);
-            var unloadDoorPanel = Box("UnloadDoorPanel", new Vector3(-5.5f, 1.0f, 0.5f), new Vector3(1.7f, 1.9f, 0.12f), mGate, unloadDoorRoot.transform);
+            Box("UnloadDoorFrameL", new Vector3(-6.45f, 1.4f, 0.5f), new Vector3(0.2f, 2.8f, 0.3f), mBooth, unloadDoorRoot.transform);
+            Box("UnloadDoorFrameR", new Vector3(-4.55f, 1.4f, 0.5f), new Vector3(0.2f, 2.8f, 0.3f), mBooth, unloadDoorRoot.transform);
+            Box("UnloadDoorHeader", new Vector3(-5.5f, 2.7f, 0.5f), new Vector3(2.1f, 0.25f, 0.3f), mBooth, unloadDoorRoot.transform);
+            var unloadDoorPanel = Box("UnloadDoorPanel", new Vector3(-5.5f, 1.525f, 0.27f), new Vector3(1.7f, 2.1f, 0.12f), mGate, unloadDoorRoot.transform);
             var udd = unloadDoorRoot.AddComponent<UnloadDoorDriver>();
             udd.DoorPanel = unloadDoorPanel.transform;
-            // de-overlap: open slide 2.2 -> 1.8 — at 2.2 the raised panel's top (y 4.15) punched
-            // 0.28m through the station RoofSlab (bottom y 3.875). At 1.8 it tops out at 3.75
-            // (0.125m clear) and the opening still gives 1.85m of head room.
-            udd.OpenOffset = new Vector3(0f, 1.8f, 0f);
+            // Side-slide clears a standing crew member above the 0.5m platform without
+            // raising the panel through the canopy. Driver sweeps both directions for crew.
+            udd.OpenOffset = new Vector3(-2f, 0f, 0f);
             Label(unloadDoorRoot, "UNLOAD DOOR", 2.7f);
 
             // ---- Exit door (simple primitive; guests walk here then despawn) ----
@@ -1692,6 +1702,25 @@ namespace ParkShift.EditorTools
 
             // ================= PARK DRESSING (pure decor — no gameplay wiring) =================
             var parkRoot = new GameObject("ParkDressing");
+            // Oversized balloon bouquets frame the plaza without entering the queue lanes.
+            for (int side = 0; side < 2; side++)
+            {
+                var bouquet = new GameObject("CartoonBalloonBouquet" + side);
+                bouquet.transform.SetParent(parkRoot.transform, false);
+                bouquet.transform.position = new Vector3(side == 0 ? -7f : 8f, 0, -16f);
+                Material[] balloonPaint = { mTrainA, mTrainB, mGate };
+                for (int b = 0; b < 3; b++)
+                {
+                    Vector3 anchor = bouquet.transform.position + new Vector3((b - 1) * 0.65f, 0, 0);
+                    float height = b == 1 ? 4.5f : 3.9f;
+                    var tether = Box("BalloonTether", anchor + Vector3.up * height * 0.5f,
+                        new Vector3(0.025f, height, 0.025f), mWhite, bouquet.transform);
+                    Object.DestroyImmediate(tether.GetComponent<Collider>());
+                    var balloon = Ball("PaintedBalloon", anchor + Vector3.up * height, 1.15f,
+                        balloonPaint[b], bouquet.transform);
+                    balloon.transform.localScale = new Vector3(1.05f, 1.4f, 1.05f);
+                }
+            }
             var rng = new System.Random(20260703); // fixed seed: rebuilds are deterministic
             System.Func<float, float, float> Rnd = (lo, hi) => lo + (float)rng.NextDouble() * (hi - lo);
 
@@ -1752,7 +1781,7 @@ namespace ParkShift.EditorTools
             groveRoot.transform.SetParent(parkRoot.transform, false);
             Vector3[] treeSpots =
             {
-                new Vector3(-12f, 0, -14f), new Vector3(12.5f, 0, -13f), new Vector3(-16f, 0, -7f),
+                new Vector3(-12f, 0, -14f), new Vector3(12.5f, 0, -13f), new Vector3(-18f, 0, -7f),
                 new Vector3(16.5f, 0, -10f), new Vector3(10f, 0, -18.5f), new Vector3(-9f, 0, -19.5f),
                 new Vector3(26f, 0, 15f), new Vector3(-21f, 0, 3f), new Vector3(-6f, 0, 10f),
                 new Vector3(5f, 0, 13f), new Vector3(0f, 0, 26f), new Vector3(22f, 0, 26f),
@@ -1949,6 +1978,9 @@ namespace ParkShift.EditorTools
             new GameObject("GameManager").AddComponent<GameManager>();
             var ps = new GameObject("PlayerSpawn"); ps.transform.position = new Vector3(10, 1.1f, -1.5f);
 
+#if FISHNET
+            ParkShift.Editor.LanSceneSetup.ConfigureCurrentScene();
+#endif
             EditorSceneManager.SaveScene(scene, "Assets/Scenes/PrototypeAttraction.unity");
         }
     }

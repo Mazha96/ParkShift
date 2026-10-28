@@ -8,12 +8,12 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Env_NeonMagenta
-  m_Shader: {fileID: 46, guid: 0000000000000000f000000000000000, type: 0}
+  m_Shader: {fileID: 4800000, guid: 225d7f64ba4f4272a0be365b1f6a7097, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
+  m_ValidKeywords: []
+  m_InvalidKeywords:
   - _EMISSION
-  m_InvalidKeywords: []
   m_LightmapFlags: 0
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -81,5 +81,6 @@ Material:
     m_Colors:
     - _Color: {r: 0.38, g: 0.1, b: 0.3, a: 1}
     - _EmissionColor: {r: 2.4, g: 0.72, b: 2.0400002, a: 2.4}
+    - _ShadowTint: {r: 0.53, g: 0.48, b: 0.72, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

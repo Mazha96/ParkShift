@@ -37,7 +37,6 @@ namespace ParkShift.Juice
         float _dispatchFxCooldown;
         float _refindTimer;
 
-        Interaction.PlayerInteractor _interactor;
         Guests.GuestVisualManager _guests;
 
         Vector3 StationPos()
@@ -116,22 +115,21 @@ namespace ParkShift.Juice
             _lastFaultCount = fc;
 
             int res = s.Score.FaultsResolved;
-            if (_lastResolved >= 0 && res > _lastResolved) AudioDirector.ResolveDing();
+            if (_lastResolved >= 0 && res > _lastResolved)
+            {
+                AudioDirector.ResolveDing();
+                ComicBurst.Show("FIXED!", StationPos() + Vector3.up * 2.4f, new Color(0.35f, 1f, 0.66f));
+            }
             _lastResolved = res;
 
             AudioDirector.SetKlaxon(KlaxonLevel(s));
 
-            // ---- Generic interact feedback: confirm blip vs refuse buzz on E ----
-            if (Input.GetKeyDown(KeyCode.E) && _interactor != null
-                && !string.IsNullOrEmpty(_interactor.CurrentPrompt))
-            {
-                if (LooksRefused(_interactor.CurrentPrompt)) AudioDirector.Refuse();
-                else AudioDirector.Confirm();
-            }
+            // Command feedback comes from AttractionManager after acceptance, not key presses.
         }
 
         void OnDispatch(AttractionSim s)
         {
+            ComicBurst.Show("WHOOSH!", StationPos() + Vector3.up * 2.4f, new Color(1f, 0.86f, 0.22f));
             int streak = s.Score.CurrentStreak;
             AudioDirector.Chime();
             if (streak >= 2) AudioDirector.ComboArp(streak);
@@ -154,6 +152,7 @@ namespace ParkShift.Juice
 
         void OnFaultTriggered(AttractionSim s)
         {
+            ComicBurst.Show("CLUNK!", StationPos() + Vector3.up * 2.4f, new Color(1f, 0.43f, 0.32f));
             bool major = false;
             for (int i = 0; i < s.Faults.Active.Count; i++)
                 if (s.Faults.Active[i].Def.Severity == FaultSeverity.Major) major = true;
@@ -166,14 +165,6 @@ namespace ParkShift.Juice
             for (int i = 0; i < s.Faults.Active.Count; i++)
                 if (s.Faults.Active[i].Def.Severity == FaultSeverity.Major) return 2;
             return 1;
-        }
-
-        static bool LooksRefused(string prompt)
-        {
-            string p = prompt.ToLowerInvariant();
-            return p.Contains("refused") || p.Contains("blocked")
-                || p.Contains("only") || p.Contains("wait for")
-                || p.Contains("first");
         }
 
         void EnsureTrainJuice(AttractionSim s)
@@ -192,11 +183,10 @@ namespace ParkShift.Juice
 
         void RefreshSceneRefs()
         {
-            if (_interactor != null && _guests != null) return;
+            if (_guests != null) return;
             _refindTimer -= Time.deltaTime;
             if (_refindTimer > 0f) return;
             _refindTimer = 1f;
-            if (_interactor == null) _interactor = Object.FindObjectOfType<Interaction.PlayerInteractor>();
             if (_guests == null) _guests = Object.FindObjectOfType<Guests.GuestVisualManager>();
         }
     }

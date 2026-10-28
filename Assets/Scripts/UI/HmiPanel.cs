@@ -49,7 +49,7 @@ namespace ParkShift.UI
             if (_root) _root.SetActive(open);
             Cursor.lockState = open ? CursorLockMode.None : CursorLockMode.Locked;
             Cursor.visible = open;
-            if (_fps == null) _fps = FindObjectOfType<FirstPersonController>();
+            if (_fps == null && RoleController.Local != null) _fps = RoleController.Local.GetComponent<FirstPersonController>();
             if (_fps != null) _fps.InputEnabled = !open;   // pause look/move so the mouse can click
             if (open) RefreshStatus();
         }
@@ -72,9 +72,14 @@ namespace ParkShift.UI
             {
                 sb.AppendLine("ACTIVE FAULTS:");
                 foreach (var f in s.Faults.Active)
-                    sb.AppendLine("  • " + f.HmiText + "\n        FIX: " + f.Def.FixHint);
+                {
+                    string deadline = f.DeadlineAt <= 0f ? "" : f.DeadlineMissed
+                        ? "  [OVERDUE — still repairable]" : "  [" + Mathf.CeilToInt(f.ResponseSecondsRemaining(s.SimTime)) + "s to respond]";
+                    sb.AppendLine("• " + f.HmiText + deadline + "\nFIX: " + f.Def.FixHint + "\n");
+                }
             }
             _status.text = sb.ToString();
+            _status.rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, Mathf.Max(380f, _status.preferredHeight + 12f));
         }
 
         // ---------------- UI construction ----------------
@@ -93,15 +98,25 @@ namespace ParkShift.UI
                 .GetComponent<RectTransform>().anchoredPosition = new Vector2(0, 252);
             Label(_root.transform, "RIDE HMI — COSMIC CONVEYOR", new Vector2(0, 252), 26, TextAnchor.MiddleCenter, new Vector2(740, 50));
 
-            _status = Label(_root.transform, "", new Vector2(0, 10), 22, TextAnchor.UpperLeft, new Vector2(700, 380));
+            var viewport = Box(_root.transform, "FaultReadout", new Vector2(700, 380), Color.clear);
+            viewport.GetComponent<RectTransform>().anchoredPosition = new Vector2(0, 10);
+            viewport.AddComponent<RectMask2D>();
+            var scroll = viewport.AddComponent<ScrollRect>();
+            scroll.horizontal = false; scroll.vertical = true; scroll.scrollSensitivity = 28f;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.viewport = viewport.GetComponent<RectTransform>();
+            _status = Label(viewport.transform, "", Vector2.zero, 22, TextAnchor.UpperLeft, new Vector2(680, 380));
+            _status.rectTransform.anchorMin = _status.rectTransform.anchorMax = new Vector2(0, 1);
+            _status.rectTransform.pivot = new Vector2(0, 1);
+            scroll.content = _status.rectTransform;
+            Label(_root.transform, "SCROLL TO READ ALL INCIDENTS", new Vector2(0, -197), 14, TextAnchor.MiddleCenter, new Vector2(680, 24));
 
-            Button(_root.transform, "ADD RV", new Vector2(-190, -238), () =>
+            Button(_root.transform, "ADD RV", new Vector2(-240, -238), () =>
             {
                 // Through the verb funnel so a FishNet client's Add RV executes on the server
                 // (the RV count replicates back; solo/host behave exactly as before).
                 var m = AttractionManager.Instance;
                 bool ok = m != null && m.Submit(OpVerb.AddRv);
-                if (ok) Juice.AudioDirector.Confirm(); else Juice.AudioDirector.Refuse();
                 if (!ok) Debug.Log("[HMI] No room to add another RV.");
             });
             Button(_root.transform, "READ FAULTS", new Vector2(0, -238), () =>
@@ -109,7 +124,7 @@ namespace ParkShift.UI
                 Juice.AudioDirector.Confirm();
                 RefreshStatus();
             });
-            Button(_root.transform, "CLOSE", new Vector2(190, -238), () =>
+            Button(_root.transform, "CLOSE", new Vector2(240, -238), () =>
             {
                 Juice.AudioDirector.Confirm();
                 SetOpen(false);
@@ -161,3 +176,4 @@ namespace ParkShift.UI
         }
     }
 }
+

@@ -33,6 +33,8 @@ namespace ParkShift.Juice
         bool _verInit;
         float _prevSpeed;
         float _sparkCooldown;
+        float _brakeSoundCooldown;
+        bool _speedInitialized;
 
         Renderer[] _barRenderers;
         Color[] _barBaseColors;
@@ -173,8 +175,15 @@ namespace ParkShift.Juice
             }
 
             // ---- Accel / brake sparks (wheel level) ----
-            float accel = (t.Speed - _prevSpeed) / dt;
+            float accel = _speedInitialized ? (t.Speed - _prevSpeed) / dt : 0f;
+            _speedInitialized = true;
             _prevSpeed = t.Speed;
+            _brakeSoundCooldown = Mathf.Max(0f, _brakeSoundCooldown - dt);
+            if (accel < -0.14f && t.Speed > 0.03f && _brakeSoundCooldown <= 0f)
+            {
+                AudioDirector.BrakeHiss(transform.position, speedNorm);
+                _brakeSoundCooldown = 0.8f;
+            }
             _sparkCooldown -= dt;
             var m = Attraction.AttractionManager.Instance;
             int lastBlock = m != null && m.Sim != null ? m.Sim.Config.BlockCount - 1 : -1;

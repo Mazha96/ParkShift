@@ -1,20 +1,21 @@
-# PARK SHIFT — "Cosmic Conveyor" Vertical Slice
+# PARK CHAOS — Cosmic Conveyor
 
-A first-person co-op chaos/job-sim about **operating** a theme park attraction:
+A first-person cartoon co-op chaos/job-sim about **operating**, **repairing**, and **managing** a theme park attraction:
 open the shift, load guests, verify restraints, dispatch trains, keep two trains
 moving through block zones, fight faults, and survive a 3-minute shift.
 
 Everything is fictional. No real parks, rides, or procedures.
+
+**Cartoon/LAN revamp:** see [REVAMP.md](REVAMP.md) for the agreed four-player direction, implemented changes, controls, build instructions, and remaining Unity playtest gates. Unity regression tests, the Windows build, rendered frames, and a four-process localhost multiplayer shift have passed. Separate-PC LAN and human gameplay tuning still need playtesting.
 
 ---
 
 ## Open & Run (5 minutes)
 
 1. **Open the project** in Unity 6 (built against `6000.0.32f1`; any 6000.x should work).
-   On first open, the Package Manager resolves **FishNet** from OpenUPM
-   (already declared in `Packages/manifest.json`). The project compiles
-   **with or without** FishNet — networking code is guarded by a `FISHNET`
-   define that activates automatically when the package resolves.
+   On first open, the Package Manager resolves **FishNet 4.7.3** from a pinned Git commit
+   (already declared in `Packages/manifest.json`). FishNet is a declared assembly
+   dependency; let package resolution finish before compiling.
 2. Menu bar → **ParkShift → Build All Scenes**. This constructs
    `MainMenu.unity` and `PrototypeAttraction.unity` from primitives and adds
    them to Build Settings. (Scenes are generated artifacts;
@@ -30,6 +31,8 @@ Everything is fictional. No real parks, rides, or procedures.
 | **E** | Interact with whatever you're looking at |
 | **Tab** | Switch role: Operator → Technician → Manager |
 | **H** | Call remote tech (auto-fixes a fault, score penalty) |
+| **Left Shift / Space** | Sprint / jump |
+| **1 / 2** (Manager) | Toggle admissions / guest care ($40) |
 | Esc | Toggle mouse lock |
 
 ## How to play a shift
@@ -58,7 +61,7 @@ mkdir -p /tmp/coretest && cd /tmp/coretest
 # Program.cs / Playtest.cs shipped under Tools/CoreTestHarness in this repo
 mcs -langversion:7.2 -out:coretest.exe \
     Tools/CoreTestHarness/*.cs Assets/Scripts/Core/*.cs
-mono coretest.exe   # runs all 17 tests + a scripted 180s bot playtest
+mono coretest.exe   # runs all 21 tests + a scripted 180s bot playtest
 ```
 
 ## Architecture (the 60-second tour)
@@ -127,19 +130,16 @@ the `Queue` object's `GuestVisualManager`: `GuestScale`, `MoveSpeed`, `SitOffset
 
 ## Graphics
 
-The look is a stylized flat-color low-poly park at **cosmic dusk**: a custom gradient
-space skybox (procedural stars + planet, `Assets/Shaders/GradientSkybox.shader`), warm
-low sun, violet trilight ambient + fog, neon trim (`NeonPulse`), procedural coaster track
-(twin rails, ties, spine, supports, brake fins, drive tires — `TrackMeshBuilder`), and
-park dressing (trees, rocks, crystals, lamps, string lights, horizon hills) all generated
-by the scene builder. Materials are flat-tinted Standard-shader assets in
-`Assets/Materials/` — the scene builder no longer assigns texture sets, so retexturing
-means editing the palette block at the top of `BuildPrototypeAttraction()` in
-`SceneBuilder.cs` and re-running **ParkShift → Build All Scenes**. (The old
-`Assets/Textures/{set}_albedo/_normal.png` swap workflow is retired; `Mat()` still
-accepts a texSet string if you want textured PBR back.) Bloom/ACES/vignette/AO
-post-processing activates automatically once the `com.unity.postprocessing` package
-resolves (already in the manifest).
+Built-in pipeline cel paint and depth/normal ink outlines give the park a bright
+cartoon finish, with warm cosmic sunset lighting. The shader assets are in
+`Assets/Resources/ParkChaos`; `CartoonParkLook` installs the outline effect on
+player cameras and `CartoonScenePalette` owns shared paint for the scene lifetime.
+Dynamic guests, added trains and network crew are painted as they spawn. Rebuilding
+scenes adds oversized balloon bouquets and updates authored materials and lighting.
+
+The existing procedural rails, supports, park dressing, imported Dewey guests and
+animated ride props are retained. Post-processing is optional and skips safely if
+its runtime resources are unavailable. Shader compilation and rendered frame inspection have passed in the Windows development build.
 
 ## Technician mode (solo)
 
@@ -149,3 +149,20 @@ In exchange, **major incidents start rolling** (the three tech-mode faults above
 plus drive trips) — one at a time, and they're yours. The HUD shows
 "AUTO-OP COVERING THE BOOTH" while it's active; Tab back to Operator and the
 booth is yours again (and major incidents stop rolling).
+
+## Manager mode
+
+Start with $120; each returned rider earns $5. Press **1** to pause or resume park
+admissions without removing the existing queue. Press **2** to spend $40 on guest
+care (+18 satisfaction, 30-second cooldown). These choices do not override any
+restraint, block or lockout checks. Solo booth coverage includes loading and
+unloading; in LAN a human crew runs the attraction.
+
+## Four-player LAN
+
+Run **ParkShift → Build All Scenes** after FishNet resolves, then
+**ParkShift → Build Windows LAN Playtest**. One player hosts; up to three others
+enter the host's LAN address and join. The transport uses UDP 7770. Use `localhost`
+for multiple processes on one computer. See `REVAMP.md` and
+`Assets/Scripts/Networking/NETWORKING.md` for exact setup and verification limits.
+

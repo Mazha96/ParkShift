@@ -25,7 +25,7 @@ namespace ParkShift.Core
 
         /// <summary>Tick the queue. simTime drives the arrival ramp and surge windows; the default
         /// config (ramp multiplier 1, surges off) leaves the legacy spawn math byte-identical.</summary>
-        public void Tick(float dt, bool rideDown, float simTime = 0f)
+        public void Tick(float dt, bool rideDown, float simTime = 0f, bool admissionsPaused = false, float emergencyDrainScale = 1f)
         {
             float interval = _cfg.GuestSpawnInterval;
             if (_cfg.GuestArrivalRampMultiplier != 1f && _cfg.ShiftLengthSeconds > 0f)
@@ -45,15 +45,17 @@ namespace ParkShift.Core
                     interval /= Math.Max(1f, _cfg.SurgeWaveSpawnMultiplier);
                 }
             }
-            _spawnTimer += dt;
-            while (_spawnTimer >= interval && QueueCount < _cfg.QueueCapacity)
+            if (!admissionsPaused && QueueCount < _cfg.QueueCapacity) _spawnTimer += dt;
+            while (!admissionsPaused && _spawnTimer >= interval && QueueCount < _cfg.QueueCapacity)
             {
                 _spawnTimer -= interval;
                 QueueCount++; TotalSpawned++;
                 OnGuestSpawned?.Invoke();
             }
+            // Do not bank arrivals while full: reopening space must not create a burst.
+            if (QueueCount >= _cfg.QueueCapacity) _spawnTimer = 0f;
             Satisfaction -= QueueCount * _cfg.SatisfactionDrainPerQueued * dt;
-            if (rideDown) Satisfaction -= _cfg.SatisfactionDrainFaulted * dt;
+            if (rideDown) Satisfaction -= _cfg.SatisfactionDrainFaulted * dt * emergencyDrainScale;
             Satisfaction = Clamp(Satisfaction, 0f, 100f);
         }
 
@@ -96,3 +98,4 @@ namespace ParkShift.Core
         static float Clamp(float v, float lo, float hi) => v < lo ? lo : (v > hi ? hi : v);
     }
 }
+

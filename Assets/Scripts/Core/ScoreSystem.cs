@@ -30,6 +30,20 @@ namespace ParkShift.Core
         public void AddDowntime(float dt) { DowntimeSeconds += dt; }
         public void AddPenalty(int pts) { PenaltyPoints += pts; }
 
+        /// <summary>Exact authoritative snapshot for a non-ticking client, including late joins.</summary>
+        public void MirrorSnapshot(int riders, int dispatches, int resolved, float downtime,
+            int penalty, int streak, int best, int combo)
+        {
+            RidersServed = System.Math.Max(0, riders);
+            Dispatches = System.Math.Max(0, dispatches);
+            FaultsResolved = System.Math.Max(0, resolved);
+            DowntimeSeconds = System.Math.Max(0f, downtime);
+            PenaltyPoints = System.Math.Max(0, penalty);
+            CurrentStreak = System.Math.Max(0, streak);
+            BestStreak = System.Math.Max(CurrentStreak, best);
+            ComboBonusPoints = System.Math.Max(0, combo);
+        }
+
         public int Compute(float finalSatisfaction)
         {
             int score = RidersServed * 10

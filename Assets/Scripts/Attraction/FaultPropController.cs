@@ -39,12 +39,32 @@ namespace ParkShift.Attraction
                 go.AddComponent<Juice.FaultStrobe>();
         }
 
+        int _flaggedTrain = -1;
+
         void Update()
         {
             var s = AttractionManager.Instance != null ? AttractionManager.Instance.Sim : null;
             if (s == null) return;
             if (DroppedItemProp) DroppedItemProp.SetActive(s.Faults.HasFault(FaultType.GuestDroppedItem));
-            if (FlaggedSeatProp) FlaggedSeatProp.SetActive(s.Faults.HasFault(FaultType.RestraintNotVerified));
+            if (FlaggedSeatProp)
+            {
+                bool flagged = s.Faults.HasFault(FaultType.RestraintNotVerified);
+                var platform = s.PlatformTrain();
+                // The incident belongs to the loaded RV, which is not always Train0.
+                if (flagged && platform != null && _flaggedTrain != platform.Id)
+                {
+                    foreach (var visual in Object.FindObjectsOfType<Vehicles.TrainVisual>())
+                        if (visual.TrainId == platform.Id)
+                        {
+                            FlaggedSeatProp.transform.SetParent(visual.transform, false);
+                            FlaggedSeatProp.transform.localPosition = new Vector3(0.2f, 0.9f, 0f);
+                            FlaggedSeatProp.transform.localRotation = Quaternion.identity;
+                            _flaggedTrain = platform.Id;
+                            break;
+                        }
+                }
+                FlaggedSeatProp.SetActive(flagged && platform != null);
+            }
             if (LotoTagProp) LotoTagProp.SetActive(s.LotoEngaged);
             if (IntruderProp) IntruderProp.SetActive(s.Faults.HasFault(FaultType.TrackIntrusion));
             if (CollisionProp) CollisionProp.SetActive(s.Faults.HasFault(FaultType.TrainCollision));

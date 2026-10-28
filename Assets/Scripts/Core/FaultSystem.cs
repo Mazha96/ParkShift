@@ -32,6 +32,9 @@ namespace ParkShift.Core
         public float LastStageAt;
         /// <summary>Optional instance-specific HMI text (e.g. names the jammed car).</summary>
         public string Detail;
+        public float DeadlineAt;
+        public bool DeadlineMissed;
+        public float ResponseSecondsRemaining(float simTime) => Math.Max(0f, DeadlineAt - simTime);
         /// <summary>What the HMI should display for this instance (falls back to the catalog message).</summary>
         public string HmiText { get { return Detail ?? Def.HmiMessage; } }
     }
@@ -115,6 +118,10 @@ namespace ParkShift.Core
         public IReadOnlyList<ActiveFault> Active => _active;
         public event Action<ActiveFault> OnFaultTriggered;
         public event Action<ActiveFault> OnFaultResolved;
+        public event Action<ActiveFault> OnDeadlineMissed;
+        float _simTime;
+        float _nextIncidentAt = 15f;
+        bool _restraintTargetAvailable = true;
 
         readonly Random _rng;
         readonly SimConfig _cfg;
@@ -154,8 +161,22 @@ namespace ParkShift.Core
         public bool AnyBlocksDispatch => _active.Exists(f => f.Def.BlocksDispatch);
         public bool AnyStopsRide => _active.Exists(f => f.Def.StopsRide);
 
-        public void Tick(float dt, float simTime)
+        public void Tick(float dt, float simTime, bool restraintTargetAvailable = true)
         {
+            _simTime = simTime;
+            _restraintTargetAvailable = restraintTargetAvailable;
+            if (_cfg.TimedFaultsEnabled)
+            {
+                foreach (var fault in _active)
+                {
+                    if (fault.DeadlineAt <= 0f || fault.DeadlineMissed || simTime < fault.DeadlineAt) continue;
+                    fault.DeadlineMissed = true;
+                    OnDeadlineMissed?.Invoke(fault);
+                }
+                // A repair never competes with a second randomly generated shutdown.
+                // Condition alerts may coexist, but do not prevent the crew recovering.
+                if (AnyBlocksDispatch || simTime < _nextIncidentAt) return;
+            }
             // Escalation ramp: chance scales linearly toward base*FaultRampMultiplier at shift end.
             // Guarded so the default (multiplier 1) leaves the legacy math byte-identical.
             float chance = _cfg.RandomFaultChancePerSecond;
@@ -165,18 +186,42 @@ namespace ParkShift.Core
                 if (p < 0f) p = 0f;
                 chance *= 1f + (_cfg.FaultRampMultiplier - 1f) * p;
             }
-            if (_rng.NextDouble() < chance * dt && _active.Count < 2)
+            if (_rng.NextDouble() < chance * dt && (_cfg.TimedFaultsEnabled || _active.Count < 2))
             {
                 var pool = _cfg.ExtendedFaultsEnabled ? ExtendedRandomPool : RandomPool;
                 var t = pool[_rng.Next(pool.Length)];
-                Trigger(t, simTime);
+                TrySchedule(t, simTime);
             }
             // Technician scenario: one major incident at a time, on its own clock
             if (TechScenarioMode && !AnyStopsRide
                 && _rng.NextDouble() < _cfg.TechFaultChancePerSecond * dt)
             {
                 var t = TechScenarioPool[_rng.Next(TechScenarioPool.Length)];
-                Trigger(t, simTime);
+                if (!_cfg.TimedFaultsEnabled || !AnyBlocksDispatch) TrySchedule(t, simTime);
+            }
+        }
+
+        void TrySchedule(FaultType type, float simTime)
+        {
+            if (_cfg.TimedFaultsEnabled && !_restraintTargetAvailable
+                && (type == FaultType.RestraintNotVerified || type == FaultType.RestraintJammedCar)) return;
+            if (_cfg.TimedFaultsEnabled && _cfg.ShiftLengthSeconds - simTime < ResponseWindow(type) + 5f) return;
+            Trigger(type, simTime);
+        }
+
+        public static float ResponseWindow(FaultType type)
+        {
+            switch (type)
+            {
+                case FaultType.BlockOccupiedStacking:
+                case FaultType.DispatchTimeout: return 0f;
+                case FaultType.TrainValleyed: return 110f;
+                case FaultType.TrainCollision: return 90f;
+                case FaultType.BlockSensorGhost:
+                case FaultType.MaintenanceResetRequired:
+                case FaultType.PowerBrownout: return 75f;
+                case FaultType.TrackIntrusion: return 60f;
+                default: return 60f;
             }
         }
 
@@ -192,7 +237,10 @@ namespace ParkShift.Core
         public ActiveFault Trigger(FaultType type, float simTime)
         {
             if (HasFault(type)) return null; // no duplicate stacking of same fault
+            _simTime = Math.Max(_simTime, simTime);
             var af = new ActiveFault { Def = Catalog[type], TriggeredAt = simTime };
+            if (_cfg.TimedFaultsEnabled && ResponseWindow(type) > 0f)
+                af.DeadlineAt = simTime + ResponseWindow(type);
             if (type == FaultType.RestraintJammedCar)
             {
                 // Seeded pick of the jammed car. Only consumes RNG for this type, so the
@@ -219,6 +267,8 @@ namespace ParkShift.Core
             if (f.Def.RequiresLoto && !f.LotoSatisfied) return false;
             if (f.Def.RequiresInspection && !f.Inspected) return false;
             _active.Remove(f);
+            if (_cfg.TimedFaultsEnabled && f.Def.BlocksDispatch)
+                _nextIncidentAt = _simTime + Math.Max(0f, _cfg.IncidentRecoverySeconds);
             OnFaultResolved?.Invoke(f);
             return true;
         }

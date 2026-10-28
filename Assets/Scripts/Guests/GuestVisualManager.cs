@@ -95,6 +95,7 @@ namespace ParkShift.Guests
         void Update()
         {
             var sim = AttractionManager.Instance.Sim;
+            if (!AttractionManager.Instance.IsAuthoritative) ReconcileRiders();
             while (_queueGuests.Count < sim.Guests.QueueCount) SpawnGuest();
             while (_queueGuests.Count > sim.Guests.QueueCount && _queueGuests.Count > 0)
             { Destroy(_queueGuests[0]); _queueGuests.RemoveAt(0); _nodes.RemoveAt(0); }
@@ -134,6 +135,7 @@ namespace ParkShift.Guests
         {
             Color hoodie = Color.HSVToRGB(Random.value, Random.Range(0.45f, 0.8f), Random.Range(0.7f, 1f));
             var g = GuestPrefab != null ? SpawnDewey(hoodie) : SpawnCapsule(hoodie);
+            ParkShift.Environment.CartoonScenePalette.Paint(g);
             g.transform.position = SpawnPoint ? SpawnPoint.position : Vector3.zero;
             // Queue life: grounded, desynced weight-shift idle + cheer hops (self-managing component).
             g.AddComponent<ParkShift.Juice.GuestBounce>();
@@ -171,10 +173,20 @@ namespace ParkShift.Guests
 
         public static void TintHoodie(GameObject g, Color hoodie)
         {
+            var block = new MaterialPropertyBlock();
             foreach (var r in g.GetComponentsInChildren<Renderer>())
-                foreach (var m in r.materials)
-                    if (m.name.StartsWith("HoodieBlue") || m.name.StartsWith("LightBlue"))
-                        m.color = hoodie;
+            {
+                var materials = r.sharedMaterials;
+                for (int i = 0; i < materials.Length; i++)
+                {
+                    var m = materials[i];
+                    if (m == null || (!m.name.StartsWith("HoodieBlue") && !m.name.StartsWith("LightBlue"))) continue;
+                    r.GetPropertyBlock(block, i);
+                    block.SetColor("_Color", hoodie);
+                    r.SetPropertyBlock(block, i);
+                    block.Clear();
+                }
+            }
         }
 
         GameObject SpawnCapsule(Color shirt)
@@ -192,8 +204,11 @@ namespace ParkShift.Guests
             body.transform.SetParent(visual.transform, false);
             body.transform.localScale = new Vector3(0.42f, 0.55f, 0.42f);
             body.transform.localPosition = Vector3.up * 0.55f; // guest origin is at the feet
-            if (GuestMaterial) body.GetComponent<Renderer>().material = GuestMaterial;
-            body.GetComponent<Renderer>().material.color = shirt;
+            var bodyRenderer = body.GetComponent<Renderer>();
+            if (GuestMaterial) bodyRenderer.sharedMaterial = GuestMaterial;
+            var bodyColor = new MaterialPropertyBlock();
+            bodyColor.SetColor("_Color", shirt);
+            bodyRenderer.SetPropertyBlock(bodyColor);
             var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             Destroy(head.GetComponent<Collider>());
             head.transform.SetParent(visual.transform, false);
@@ -214,6 +229,7 @@ namespace ParkShift.Guests
 
         void OnBoarded(int n)
         {
+            if (!AttractionManager.Instance.IsAuthoritative) return;
             var sim = AttractionManager.Instance.Sim;
             var platform = sim.PlatformTrain();
             if (platform == null) return;
@@ -232,6 +248,39 @@ namespace ParkShift.Guests
                 g.transform.rotation = tv.transform.rotation; // face travel direction, stay upright
                 SetAnim(g, "Sit", 1f);
                 list.Add(g);
+            }
+        }
+
+        // Replicated counts are the source of truth; queue deltas can include arrivals and
+        // boarding within one snapshot, so they cannot reliably reconstruct seated riders.
+        void ReconcileRiders()
+        {
+            var sim = AttractionManager.Instance.Sim;
+            foreach (var tv in Trains)
+            {
+                if (tv == null || tv.TrainId >= sim.Trains.Length || tv.SeatAnchors == null) continue;
+                if (!_riders.TryGetValue(tv.TrainId, out var list))
+                    _riders[tv.TrainId] = list = new List<GameObject>();
+                int count = Mathf.Min(sim.Trains[tv.TrainId].Riders, tv.SeatAnchors.Length);
+                if (count == 0 && list.Count > 0) { ReleaseRiders(tv.TrainId); continue; }
+                while (list.Count > count)
+                {
+                    Destroy(list[list.Count - 1]); list.RemoveAt(list.Count - 1);
+                }
+                while (list.Count < count)
+                {
+                    var anchor = tv.SeatAnchors[list.Count];
+                    if (anchor == null) break;
+                    Color shirt = Color.HSVToRGB((tv.TrainId * 0.27f + list.Count * 0.13f) % 1f, 0.65f, 0.9f);
+                    var guest = GuestPrefab != null ? SpawnDewey(shirt) : SpawnCapsule(shirt);
+                    ParkShift.Environment.CartoonScenePalette.Paint(guest);
+                    guest.transform.SetParent(anchor, true);
+                    guest.transform.position = anchor.position + tv.transform.rotation *
+                        (GuestPrefab != null ? SitOffset : Vector3.up * 0.5f);
+                    guest.transform.rotation = tv.transform.rotation;
+                    SetAnim(guest, "Sit", 1f);
+                    list.Add(guest);
+                }
             }
         }
 
@@ -326,3 +375,4 @@ namespace ParkShift.Guests
         }
     }
 }
+

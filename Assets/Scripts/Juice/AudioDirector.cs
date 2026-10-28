@@ -438,6 +438,25 @@ namespace ParkShift.Juice
             Instance.PlayShot(AudioSynth.Fanfare(grade), Vector3.zero, 0.75f, 1f, 0f, 20f);
         }
 
+        /// <summary>Quiet work cadence; deliberately not a success chime.</summary>
+        public static void RepairTick(int beat)
+        {
+            if (Instance != null) Instance.PlayShot(AudioSynth.Click(), Vector3.zero,
+                0.16f, 0.85f + 0.08f * Mathf.Clamp(beat, 0, 3), 0f, 20f);
+        }
+
+        public static void Footstep(bool soft, bool sprinting, int variation)
+        {
+            if (Instance != null) Instance.PlayShot(AudioSynth.Footstep(soft, variation), Vector3.zero,
+                sprinting ? 0.3f : 0.2f, (variation & 1) == 0 ? 0.96f : 1.04f, 0f, 20f);
+        }
+
+        public static void BrakeHiss(Vector3 pos, float strength)
+        {
+            if (Instance != null) Instance.PlayShot(AudioSynth.BrakeHiss(), pos,
+                Mathf.Lerp(0.25f, 0.55f, Mathf.Clamp01(strength)), 1f, 1f, 28f);
+        }
+
         /// <summary>Landing thump (local player — 2D).</summary>
         public static void Thump(float power)
         {

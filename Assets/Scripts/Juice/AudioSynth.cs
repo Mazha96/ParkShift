@@ -310,6 +310,33 @@ namespace ParkShift.Juice
             return Bake("power_up", d);
         }
 
+        /// <summary>Short sole impact and scuff, cached per surface and alternating foot.</summary>
+        public static AudioClip Footstep(bool soft, int variation)
+        {
+            variation &= 1;
+            string key = "step_" + (soft ? "soft_" : "hard_") + variation;
+            AudioClip c; if (Has(key, out c)) return c;
+            var d = NewBuf(0.16f);
+            AddTone(d, 0f, 0.085f, soft ? 90f : 145f, 65f, Wave.Sine, 0.55f, 0.002f, 0.08f);
+            AddNoise(d, 0.008f, 0.13f, soft ? 0.55f : 0.3f, 0.004f, 0.12f,
+                soft ? 0.12f : 0.42f, 0.04f, 1901 + variation * 31);
+            Normalize(d, 0.55f);
+            FadeEnds(d, 0.002f, 0.03f);
+            return Bake(key, d);
+        }
+
+        /// <summary>Soft pneumatic release with a downward wheel tone for braking.</summary>
+        public static AudioClip BrakeHiss()
+        {
+            AudioClip c; if (Has("brake_hiss", out c)) return c;
+            var d = NewBuf(0.55f);
+            AddNoise(d, 0f, 0.5f, 0.65f, 0.025f, 0.36f, 0.32f, 0.035f, 2003);
+            AddTone(d, 0.02f, 0.37f, 420f, 130f, Wave.Sine, 0.12f, 0.04f, 0.25f);
+            Normalize(d, 0.6f);
+            FadeEnds(d, 0.008f, 0.045f);
+            return Bake("brake_hiss", d);
+        }
+
         /// <summary>Landing thump for the first-person camera.</summary>
         public static AudioClip Thump()
         {

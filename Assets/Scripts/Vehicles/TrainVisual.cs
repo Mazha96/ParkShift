@@ -25,6 +25,11 @@ namespace ParkShift.Vehicles
 
         [Tooltip("How quickly the visual catches up to the sim position (1/s).")]
         public float FollowSharpness = 8f;
+        [Header("Cartoon suspension (visual only)")]
+        public bool EnableSuspension = true;
+        [Range(0f, 8f)] public float MaxSuspensionPitch = 4.5f;
+        float _suspensionPitch, _suspensionVelocity, _lastSimSpeed;
+        bool _suspensionInitialized;
 
         [Header("Articulated cars (auto-discovered children named Car0..CarN if empty)")]
         public Transform[] Cars;
@@ -102,6 +107,23 @@ namespace ParkShift.Vehicles
             if (m == null || Path == null || m.Sim == null) return;
             if (TrainId < 0 || TrainId >= m.Sim.Trains.Length) return;
             var t = m.Sim.Trains[TrainId];
+            float dt = Time.deltaTime;
+            float acceleration = _suspensionInitialized && dt > 0f ? (t.Speed - _lastSimSpeed) / dt : 0f;
+            _lastSimSpeed = t.Speed;
+            _suspensionInitialized = true;
+            float pitchTarget = EnableSuspension ? Mathf.Clamp(-acceleration * 12f,
+                -MaxSuspensionPitch, MaxSuspensionPitch) : 0f;
+            // A bounded spring makes each launch rear back and every stop nod forward.
+            // Small integration steps remain stable after hitches; sim positions stay untouched.
+            float remaining = Mathf.Min(dt, 0.1f);
+            while (remaining > 0f)
+            {
+                float h = Mathf.Min(remaining, 1f / 120f);
+                _suspensionVelocity += ((pitchTarget - _suspensionPitch) * 100f - _suspensionVelocity * 9f) * h;
+                _suspensionPitch = Mathf.Clamp(_suspensionPitch + _suspensionVelocity * h,
+                    -MaxSuspensionPitch, MaxSuspensionPitch);
+                remaining -= h;
+            }
 
             float target = Path.DistanceOf(t.CurrentBlock, t.Progress);
             float len = Path.TotalLength;
@@ -126,10 +148,11 @@ namespace ParkShift.Vehicles
                 for (int i = 0; i < Cars.Length; i++)
                 {
                     if (Cars[i] == null) continue;
-                    if (i == 0) { Cars[i].position = pos; Cars[i].rotation = rot; continue; }
+                    Quaternion suspension = Quaternion.Euler(_suspensionPitch * (1f - 0.08f * Mathf.Min(i, 5)), 0f, 0f);
+                    if (i == 0) { Cars[i].position = pos; Cars[i].rotation = rot * suspension; continue; }
                     _frames.FrameAt(_dist - i * CarSpacing, out var cp, out var cr);
                     Cars[i].position = cp;
-                    Cars[i].rotation = cr;
+                    Cars[i].rotation = cr * suspension;
                 }
             }
 
@@ -145,8 +168,7 @@ namespace ParkShift.Vehicles
             // Restraint fallback: same open/closed rule as TrainRestraintDriver.
             if (_bars != null)
             {
-                bool barsUp = (t.State == TrainState.InStationLoading || t.State == TrainState.InStationUnloading)
-                              && !t.RestraintsVerified;
+                bool barsUp = TrainRestraintDriver.ShouldOpen(t, m.Sim);
                 _barT = Mathf.MoveTowards(_barT, barsUp ? 0f : 1f, RestraintSpeed * Time.deltaTime);
                 var swing = Quaternion.Euler(RestraintClosedEuler * Mathf.SmoothStep(0f, 1f, _barT));
                 for (int i = 0; i < _bars.Length; i++)
@@ -157,72 +179,5 @@ namespace ParkShift.Vehicles
         public TrainState State => AttractionManager.Instance.Sim.Trains[TrainId].State;
     }
 
-    /// <summary>Read-only thruster FX for the GALAXY EXPRESS: scales the emissive glow of
-    /// every child renderer named "Thruster*" with the same sim speed TrainVisual mirrors
-    /// (TrainSim.Speed, normalized by FullSpeed like TrainJuice), driven through a shared
-    /// MaterialPropertyBlock (NeonPulse pattern — no material instancing, no per-frame
-    /// allocation, no sim mutation). Added by TrainCarFactory; TrainId comes from the
-    /// sibling TrainVisual. A subtle flicker rides on top so the burn feels alive.</summary>
-    public class TrainThrusterGlow : MonoBehaviour
-    {
-        [Tooltip("Sim speed (block-progress units/s) that counts as full burn.")]
-        public float FullSpeed = 0.3f;
-        [Tooltip("Thruster emission color at full burn.")]
-        public Color GlowColor = new Color(0.25f, 0.85f, 1f);
-        [Tooltip("Emission boost while parked (idle pilot glow).")]
-        public float IdleBoost = 0.6f;
-        [Tooltip("Emission boost at full burn.")]
-        public float BurnBoost = 5.5f;
-        [Tooltip("How quickly the glow tracks speed changes (1/s).")]
-        public float Response = 6f;
-
-        TrainVisual _tv;
-        Renderer[] _thrusters;
-        MaterialPropertyBlock _mpb;
-        float _level;
-        static readonly int EmissionId = Shader.PropertyToID("_EmissionColor");
-
-        void Start()
-        {
-            _tv = GetComponent<TrainVisual>();
-            _mpb = new MaterialPropertyBlock();
-            var list = new List<Renderer>();
-            CollectThrusters(transform, list);
-            _thrusters = list.ToArray();
-        }
-
-        static void CollectThrusters(Transform t, List<Renderer> into)
-        {
-            foreach (Transform c in t)
-            {
-                if (c.name.StartsWith("Thruster")) into.AddRange(c.GetComponentsInChildren<Renderer>());
-                else CollectThrusters(c, into);
-            }
-        }
-
-        void Update()
-        {
-            if (_thrusters == null || _thrusters.Length == 0) return;
-            var m = AttractionManager.Instance;
-            if (m == null || m.Sim == null) return;
-            int id = _tv != null ? _tv.TrainId : -1;
-            if (id < 0 || id >= m.Sim.Trains.Length) return;
-
-            // Exponential tracking so burn changes glide instead of snapping.
-            float norm = Mathf.Clamp01(m.Sim.Trains[id].Speed / Mathf.Max(0.01f, FullSpeed));
-            _level += (norm - _level) * (1f - Mathf.Exp(-Response * Time.deltaTime));
-
-            float flicker = 1f + 0.07f * _level * Mathf.Sin(Time.time * 39f + id * 2.1f);
-            Color e = GlowColor * Mathf.Lerp(IdleBoost, BurnBoost, _level) * flicker;
-            for (int i = 0; i < _thrusters.Length; i++)
-            {
-                var r = _thrusters[i];
-                if (r == null) continue;
-                r.GetPropertyBlock(_mpb);
-                _mpb.SetColor(EmissionId, e);
-                r.SetPropertyBlock(_mpb);
-            }
-        }
-    }
 }
 // (procedural coaster overhaul)

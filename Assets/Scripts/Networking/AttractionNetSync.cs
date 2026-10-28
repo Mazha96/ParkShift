@@ -1,6 +1,7 @@
 #if FISHNET
 using System.Collections.Generic;
 using FishNet.Object;
+using FishNet.Connection;
 using FishNet.Object.Synchronizing;
 using UnityEngine;
 using ParkShift.Attraction;
@@ -53,6 +54,14 @@ namespace ParkShift.Networking
         readonly SyncVar<bool> _unloadAreaClear = new SyncVar<bool>();
         readonly SyncVar<bool> _guestsUnloading = new SyncVar<bool>();
 
+        readonly SyncVar<int> _managementBudget = new SyncVar<int>(120);
+        readonly SyncVar<int> _managementRevenue = new SyncVar<int>();
+        readonly SyncVar<int> _managementCareCount = new SyncVar<int>();
+        readonly SyncVar<bool> _admissionsPaused = new SyncVar<bool>();
+        readonly SyncVar<float> _careCooldown = new SyncVar<float>();
+        readonly SyncVar<float> _assistantRemaining = new SyncVar<float>(-1f);
+        readonly Dictionary<NetworkConnection, PlayerRole> _roles = new Dictionary<NetworkConnection, PlayerRole>();
+
         // ---- Train slots (fixed max, per-slot occupancy via flags == -1) ----
         // Pose: (block, progress, trainState, speed). Flags: riders | (verified ? 1<<8 : 0).
         readonly SyncVar<Vector4> _train0Pose = new SyncVar<Vector4>();
@@ -71,6 +80,10 @@ namespace ParkShift.Networking
         readonly SyncVar<int> _fault1 = new SyncVar<int>(-1);
         readonly SyncVar<int> _fault2 = new SyncVar<int>(-1);
         readonly SyncVar<int> _fault3 = new SyncVar<int>(-1);
+        readonly SyncVar<float> _fault0Deadline = new SyncVar<float>();
+        readonly SyncVar<float> _fault1Deadline = new SyncVar<float>();
+        readonly SyncVar<float> _fault2Deadline = new SyncVar<float>();
+        readonly SyncVar<float> _fault3Deadline = new SyncVar<float>();
         readonly SyncVar<string> _fault0Text = new SyncVar<string>("");
         readonly SyncVar<string> _fault1Text = new SyncVar<string>("");
         readonly SyncVar<string> _fault2Text = new SyncVar<string>("");
@@ -84,6 +97,7 @@ namespace ParkShift.Networking
         readonly SyncVar<int> _currentStreak = new SyncVar<int>();
         readonly SyncVar<int> _bestStreak = new SyncVar<int>();
         readonly SyncVar<int> _comboBonus = new SyncVar<int>();
+        readonly SyncVar<float> _downtime = new SyncVar<float>();
 
         // ---- Effective config (set once server-side; late joiners get it on spawn) ----
         readonly SyncVar<int> _cfgTrainCount = new SyncVar<int>();
@@ -94,11 +108,32 @@ namespace ParkShift.Networking
         readonly SyncVar<int> _cfgBrownoutStageCount = new SyncVar<int>();
         readonly SyncVar<float> _cfgShiftLength = new SyncVar<float>();
 
-        // Non-sync convenience indices over the per-slot SyncVars (references, built once).
-        SyncVar<Vector4>[] _trainPose;
-        SyncVar<int>[] _trainFlags;
-        SyncVar<int>[] _faultData;
-        SyncVar<string>[] _faultText;
+        // Keep SyncVars as concrete fields: FishNet ILPP treats SyncVar arrays as SyncTypes.
+        SyncVar<Vector4> TrainPose(int slot)
+        {
+            switch (slot) { case 0: return _train0Pose; case 1: return _train1Pose;
+                case 2: return _train2Pose; default: return _train3Pose; }
+        }
+        SyncVar<int> TrainFlags(int slot)
+        {
+            switch (slot) { case 0: return _train0Flags; case 1: return _train1Flags;
+                case 2: return _train2Flags; default: return _train3Flags; }
+        }
+        SyncVar<int> FaultData(int slot)
+        {
+            switch (slot) { case 0: return _fault0; case 1: return _fault1;
+                case 2: return _fault2; default: return _fault3; }
+        }
+        SyncVar<string> FaultText(int slot)
+        {
+            switch (slot) { case 0: return _fault0Text; case 1: return _fault1Text;
+                case 2: return _fault2Text; default: return _fault3Text; }
+        }
+        SyncVar<float> FaultDeadline(int slot)
+        {
+            switch (slot) { case 0: return _fault0Deadline; case 1: return _fault1Deadline;
+                case 2: return _fault2Deadline; default: return _fault3Deadline; }
+        }
 
         float _pushTimer;
         bool _slotWarned;
@@ -106,17 +141,30 @@ namespace ParkShift.Networking
         void Awake()
         {
             Instance = this;
-            _trainPose = new SyncVar<Vector4>[] { _train0Pose, _train1Pose, _train2Pose, _train3Pose };
-            _trainFlags = new SyncVar<int>[] { _train0Flags, _train1Flags, _train2Flags, _train3Flags };
-            _faultData = new SyncVar<int>[] { _fault0, _fault1, _fault2, _fault3 };
-            _faultText = new SyncVar<string>[] { _fault0Text, _fault1Text, _fault2Text, _fault3Text };
+        }
+
+        public bool HasTechnician
+        {
+            get
+            {
+                foreach (var role in _roles.Values) if (role == PlayerRole.Technician) return true;
+                return false;
+            }
+        }
+
+        void OnRemoteConnectionState(NetworkConnection connection, FishNet.Transporting.RemoteConnectionStateArgs args)
+        {
+            if (args.ConnectionState == FishNet.Transporting.RemoteConnectionState.Stopped)
+                _roles.Remove(connection);
         }
 
         public override void OnStartServer()
         {
             base.OnStartServer();
+            ServerManager.OnRemoteConnectionState += OnRemoteConnectionState;
             var m = AttractionManager.Instance;
             if (m == null || m.Sim == null) return;
+            m.IsAuthoritative = true;
             var s = m.Sim;
             _cfgTrainCount.Value = s.Trains.Length;
             _cfgBlockCount.Value = s.Config.BlockCount;
@@ -131,6 +179,7 @@ namespace ParkShift.Networking
         public override void OnStartClient()
         {
             base.OnStartClient();
+            if (Player.RoleController.Local != null) SelectRole(Player.RoleController.Local.Role);
             if (IsServerInitialized) return; // host: local sim is already authoritative
             AttractionManager.Instance.VerbRouter = v => { ServerSubmitVerb((int)v); return true; };
             WarnOnConfigMismatch();
@@ -153,6 +202,12 @@ namespace ParkShift.Networking
             if (m == null || m.Sim == null) return;
             var s = m.Sim;
 
+            _managementBudget.Value = s.Management.Budget;
+            _managementRevenue.Value = s.Management.Revenue;
+            _managementCareCount.Value = s.Management.GuestCareCount;
+            _admissionsPaused.Value = s.Management.AdmissionsPaused;
+            _careCooldown.Value = s.Management.GuestCareCooldownRemaining;
+            _assistantRemaining.Value = m.AssistantRemaining;
             _state.Value = (int)s.State;
             _satisfaction.Value = s.Guests.Satisfaction;
             _queueCount.Value = s.Guests.QueueCount;
@@ -172,12 +227,12 @@ namespace ParkShift.Networking
                 if (i < s.Trains.Length)
                 {
                     var t = s.Trains[i];
-                    _trainPose[i].Value = new Vector4(t.CurrentBlock, t.Progress, (int)t.State, t.Speed);
-                    _trainFlags[i].Value = (t.Riders & 0xFF) | (t.RestraintsVerified ? 1 << 8 : 0);
+                    TrainPose(i).Value = new Vector4(t.CurrentBlock, t.Progress, (int)t.State, t.Speed);
+                    TrainFlags(i).Value = (t.Riders & 0xFF) | (t.RestraintsVerified ? 1 << 8 : 0);
                 }
                 else
                 {
-                    _trainFlags[i].Value = -1;
+                    TrainFlags(i).Value = -1;
                 }
             }
             if (s.Trains.Length > MaxTrainSlots && !_slotWarned)
@@ -194,13 +249,15 @@ namespace ParkShift.Networking
                 if (i < s.Faults.Active.Count)
                 {
                     var f = s.Faults.Active[i];
-                    _faultData[i].Value = EncodeFault(f);
-                    _faultText[i].Value = f.HmiText ?? "";
+                    FaultData(i).Value = EncodeFault(f);
+                    FaultText(i).Value = f.HmiText ?? "";
+                    FaultDeadline(i).Value = f.DeadlineAt;
                 }
                 else
                 {
-                    _faultData[i].Value = -1;
-                    _faultText[i].Value = "";
+                    FaultData(i).Value = -1;
+                    FaultText(i).Value = "";
+                    FaultDeadline(i).Value = 0f;
                 }
             }
 
@@ -211,6 +268,7 @@ namespace ParkShift.Networking
             _currentStreak.Value = s.Score.CurrentStreak;
             _bestStreak.Value = s.Score.BestStreak;
             _comboBonus.Value = s.Score.ComboBonusPoints;
+            _downtime.Value = s.Score.DowntimeSeconds;
         }
 
         static int EncodeFault(ActiveFault f)
@@ -220,6 +278,7 @@ namespace ParkShift.Networking
             v |= ((f.TargetIndex + 1) & 0xFF) << 16; // +1 so -1 (n/a) encodes as 0
             if (f.Inspected) v |= 1 << 24;
             if (f.LotoSatisfied) v |= 1 << 25;
+            if (f.DeadlineMissed) v |= 1 << 26;
             return v;
         }
 
@@ -237,6 +296,10 @@ namespace ParkShift.Networking
             var m = AttractionManager.Instance;
             if (m == null || m.Sim == null || m.IsAuthoritative) return;
             var s = m.Sim;
+
+            m.MirrorAssistant(_assistantRemaining.Value);
+            s.Management.MirrorState(_managementBudget.Value, _managementRevenue.Value,
+                _managementCareCount.Value, _admissionsPaused.Value, _careCooldown.Value);
 
             // 1) Shift opened on the server -> open the mirror (drives Closed -> Ready).
             if ((AttractionState)_state.Value != AttractionState.Closed && s.State == AttractionState.Closed)
@@ -257,7 +320,10 @@ namespace ParkShift.Networking
                 int block; float progress; TrainState tState; float tSpeed; int tRiders; bool tVerified;
                 if (TryGetMirrorTrain(i, out block, out progress, out tState, out tSpeed,
                                       out tRiders, out tVerified))
+                {
                     s.Trains[i].MirrorPose(block, progress, tState, tSpeed);
+                    s.Trains[i].MirrorOccupants(tRiders, tVerified);
+                }
             }
 
             // 4) Faults BEFORE satisfaction/score: Trigger/Resolve side effects (penalty,
@@ -273,7 +339,6 @@ namespace ParkShift.Networking
             //    THEN the queue count — MirrorQueue fires OnGuestsBoarded for the decrease,
             //    and the guest visuals seat the boarded guests on the (already-mirrored)
             //    platform train.
-            MirrorPlatformTrain(s);
             s.Guests.MirrorQueue(_queueCount.Value);
 
             // 7) Satisfaction: steer to the snapshot with the public clamped add/subtract.
@@ -281,16 +346,9 @@ namespace ParkShift.Networking
             if (dSat > 0.01f) s.Guests.RewardDispatch(dSat);
             else if (dSat < -0.01f) s.Guests.Penalize(-dSat);
 
-            // 8) Score/streak top-ups (monotonic counters via public adders).
-            var sc = s.Score;
-            if (_ridersServed.Value > sc.RidersServed) sc.AddRiders(_ridersServed.Value - sc.RidersServed);
-            guard = 0;
-            while (sc.FaultsResolved < _faultsResolved.Value && guard++ < 64) sc.AddFaultResolved();
-            if (_penaltyPoints.Value > sc.PenaltyPoints) sc.AddPenalty(_penaltyPoints.Value - sc.PenaltyPoints);
-            if (_comboBonus.Value > sc.ComboBonusPoints) sc.AddComboBonus(_comboBonus.Value - sc.ComboBonusPoints);
-            if (sc.CurrentStreak > _currentStreak.Value) sc.BreakStreak();
-            guard = 0;
-            while (sc.CurrentStreak < _currentStreak.Value && guard++ < 64) sc.AddDispatch();
+            // Exact snapshots preserve totals even when a client joins after a streak broke.
+            s.Score.MirrorSnapshot(_ridersServed.Value, _dispatches.Value, _faultsResolved.Value,
+                _downtime.Value, _penaltyPoints.Value, _currentStreak.Value, _bestStreak.Value, _comboBonus.Value);
 
             // 9) Ops stamp LAST so the replicated state wins over any transitional flips the
             //    steps above produced. Also drives the shift clock, the unload workflow flags
@@ -331,7 +389,7 @@ namespace ParkShift.Networking
             // PanelInteractable prompts and the HMI read per-instance truth.
             for (int i = 0; i < MaxFaultSlots; i++)
             {
-                int packed = _faultData[i].Value;
+                int packed = FaultData(i).Value;
                 if (packed < 0) continue;
                 var type = (FaultType)(packed & 0xFF);
                 var f = s.Faults.Find(type);
@@ -341,7 +399,9 @@ namespace ParkShift.Networking
                 f.TargetIndex = ((packed >> 16) & 0xFF) - 1;
                 f.Inspected = (packed & (1 << 24)) != 0;
                 f.LotoSatisfied = (packed & (1 << 25)) != 0;
-                string text = _faultText[i].Value;
+                f.DeadlineAt = FaultDeadline(i).Value;
+                f.DeadlineMissed = (packed & (1 << 26)) != 0;
+                string text = FaultText(i).Value;
                 if (!string.IsNullOrEmpty(text)) f.Detail = text;
             }
         }
@@ -350,7 +410,7 @@ namespace ParkShift.Networking
         {
             for (int i = 0; i < MaxFaultSlots; i++)
             {
-                int packed = _faultData[i].Value;
+                int packed = FaultData(i).Value;
                 if (packed >= 0 && (FaultType)(packed & 0xFF) == type) return true;
             }
             return false;
@@ -360,7 +420,7 @@ namespace ParkShift.Networking
         {
             var pt = s.PlatformTrain();
             if (pt == null || pt.Id >= MaxTrainSlots) return;
-            int flags = _trainFlags[pt.Id].Value;
+            int flags = TrainFlags(pt.Id).Value;
             if (flags < 0) return;
             int riders = flags & 0xFF;
             bool verified = (flags & (1 << 8)) != 0;
@@ -386,10 +446,53 @@ namespace ParkShift.Networking
         // ================= Verb routing (client -> server) =================
 
         [ServerRpc(RequireOwnership = false)]
-        void ServerSubmitVerb(int verb)
+        void ServerSubmitVerb(int verb, NetworkConnection sender = null)
         {
-            // Validation happens inside the sim itself (CanDispatch etc.) — server is authority.
-            AttractionManager.Instance.Execute((OpVerb)verb);
+            if (sender == null) return;
+            if (!System.Enum.IsDefined(typeof(OpVerb), verb)) { TargetCommandResult(sender, "Unknown command"); return; }
+            if ((OpVerb)verb == OpVerb.ToggleAdmissions || (OpVerb)verb == OpVerb.GuestCare)
+            {
+                if (!_roles.TryGetValue(sender, out var role) || role != PlayerRole.Manager)
+                { TargetCommandResult(sender, "Manager role required"); return; }
+            }
+            var operation = (OpVerb)verb;
+            bool maintenance = operation == OpVerb.ToggleLoto || operation == OpVerb.MaintenanceReset
+                || operation == OpVerb.EscortIntruder || operation == OpVerb.InspectCollision
+                || operation == OpVerb.WinchTrain || operation == OpVerb.AdvanceBrownoutStage;
+            if (maintenance && (sender == null || !_roles.TryGetValue(sender, out var crewRole)
+                || (crewRole != PlayerRole.Technician && crewRole != PlayerRole.Manager)))
+            { TargetCommandResult(sender, "Technician or Manager role required"); return; }
+            // Safety validation remains inside the authoritative simulation.
+            var manager = AttractionManager.Instance;
+            bool accepted = manager.Execute(operation);
+            TargetCommandResult(sender, accepted ? "Host processed command" : manager.CommandRejectionReason(operation));
+        }
+
+        [TargetRpc]
+        void TargetCommandResult(NetworkConnection target, string message)
+        {
+            AttractionManager.Instance?.ReportCommandStatus(message);
+        }
+
+        /// <summary>Roles remain freely selectable hats, but the server stores the accepted choice.</summary>
+        public void SelectRole(PlayerRole role)
+        {
+            if (NetworkObject != null && IsClientInitialized) ServerSelectRole((int)role);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        void ServerSelectRole(int role, NetworkConnection sender = null)
+        {
+            if (sender == null || !System.Enum.IsDefined(typeof(PlayerRole), role)) return;
+            _roles[sender] = (PlayerRole)role;
+        }
+
+        public override void OnStopServer()
+        {
+            ServerManager.OnRemoteConnectionState -= OnRemoteConnectionState;
+            _roles.Clear();
+            if (AttractionManager.Instance != null) AttractionManager.Instance.IsAuthoritative = false;
+            base.OnStopServer();
         }
 
         // ================= Mirror accessors (raw snapshot reads) =================
@@ -407,7 +510,7 @@ namespace ParkShift.Networking
         public bool MirrorUnloadAreaClear => _unloadAreaClear.Value;
         public bool MirrorGuestsUnloading => _guestsUnloading.Value;
         public int MirrorTrainCount => _trainCount.Value;
-        public string MirrorFault => _faultData[0].Value >= 0 ? _faultText[0].Value : "";
+        public string MirrorFault => FaultData(0).Value >= 0 ? FaultText(0).Value : "";
         public int MirrorRidersServed => _ridersServed.Value;
         public int MirrorDispatches => _dispatches.Value;
         public int MirrorCurrentStreak => _currentStreak.Value;
@@ -432,10 +535,10 @@ namespace ParkShift.Networking
         {
             block = 0; progress = 0f; state = TrainState.InStationLoading; speed = 0f;
             riders = 0; restraintsVerified = false;
-            if (slot < 0 || slot >= MaxTrainSlots || _trainFlags[slot].Value < 0) return false;
-            var p = _trainPose[slot].Value;
+            if (slot < 0 || slot >= MaxTrainSlots || TrainFlags(slot).Value < 0) return false;
+            var p = TrainPose(slot).Value;
             block = (int)p.x; progress = p.y; state = (TrainState)(int)p.z; speed = p.w;
-            int flags = _trainFlags[slot].Value;
+            int flags = TrainFlags(slot).Value;
             riders = flags & 0xFF;
             restraintsVerified = (flags & (1 << 8)) != 0;
             return true;
@@ -449,16 +552,22 @@ namespace ParkShift.Networking
             type = FaultType.RestraintNotVerified; stage = 0; targetIndex = -1;
             inspected = false; lotoSatisfied = false; hmiText = "";
             if (slot < 0 || slot >= MaxFaultSlots) return false;
-            int packed = _faultData[slot].Value;
+            int packed = FaultData(slot).Value;
             if (packed < 0) return false;
             type = (FaultType)(packed & 0xFF);
             stage = (packed >> 8) & 0xFF;
             targetIndex = ((packed >> 16) & 0xFF) - 1;
             inspected = (packed & (1 << 24)) != 0;
             lotoSatisfied = (packed & (1 << 25)) != 0;
-            hmiText = _faultText[slot].Value;
+            hmiText = FaultText(slot).Value;
             return true;
         }
     }
 }
 #endif
+
+
+
+
+
+

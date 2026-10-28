@@ -19,7 +19,7 @@ namespace ParkShift.Attraction
                          UnjamCar0, UnjamCar1, UnjamCar2, UnjamCar3,
                          // Wave 2 (final review): HMI "Add RV" routed through the funnel so a
                          // FishNet client's Add RV runs server-side (the count then replicates).
-                         AddRv }
+                         AddRv, ToggleAdmissions, GuestCare }
 
     /// <summary>
     /// Unity bridge for the engine-agnostic AttractionSim.
@@ -32,7 +32,7 @@ namespace ParkShift.Attraction
 
         public AttractionSim Sim { get; private set; }
         public AutoOperator AutoOp { get; private set; }
-        /// <summary>True while the auto-operator is covering the booth (player is Technician, solo).</summary>
+        /// <summary>True while the auto-operator covers the booth (Technician or Manager, solo).</summary>
         public bool AutoOpActive => AutoOp != null && AutoOp.Enabled;
         public bool IsAuthoritative { get; set; } = true; // solo & host = true; FishNet client = false
         public System.Func<OpVerb, bool> VerbRouter;       // set by AttractionNetSync on clients
@@ -68,12 +68,50 @@ namespace ParkShift.Attraction
         public GuestVisualManager GuestVisuals;
 
         /// <summary>Player-facing 'Add RV' (HMI). Returns false if there's no room.</summary>
-        public bool AddRv() => Sim != null && Sim.AddTrain() != null;
+        public bool AddRv()
+        {
+#if FISHNET
+            if (Networking.NetworkBootstrap.Mode != Networking.NetMode.Solo && Sim != null
+                && Sim.Trains.Length >= Networking.AttractionNetSync.MaxTrainSlots) return false;
+#endif
+            return Sim != null && Sim.AddTrain() != null;
+        }
 
         [Header("Assistant (solo helper)")]
         public float AssistantPenalty = 30;
         float _assistantTimer = -1f;
         public float AssistantRemaining => _assistantTimer;
+        string _lastCommandStatus = "";
+        float _commandStatusUntil;
+        public string LastCommandStatus => Time.unscaledTime < _commandStatusUntil ? _lastCommandStatus : "";
+        public void ReportCommandStatus(string message)
+        {
+            _lastCommandStatus = message;
+            _commandStatusUntil = Time.unscaledTime + 4f;
+            if (message == "Command processed" || message == "Host processed command") Juice.AudioDirector.Confirm();
+            else if (!string.IsNullOrEmpty(message) && message != "Waiting for host...") Juice.AudioDirector.Refuse();
+        }
+        public void MirrorAssistant(float seconds)
+        {
+            if (!IsAuthoritative) _assistantTimer = seconds;
+        }
+        public string CommandRejectionReason(OpVerb verb)
+        {
+            if (verb == OpVerb.Dispatch && !Sim.CanDispatch(out var dispatchReason)) return dispatchReason;
+            if (verb == OpVerb.GuestCare && !Sim.Management.CanOfferGuestCare(out var careReason)) return careReason;
+            if (verb == OpVerb.AddRv) return "No available RV slot";
+            if (verb == OpVerb.CallAssistant) return _assistantTimer > 0f ? "Assistant already en route" : "No fault needs an assistant";
+            if (verb >= OpVerb.UnjamCar0 && verb <= OpVerb.UnjamCar3)
+            {
+                var jam = Sim.Faults.Find(FaultType.RestraintJammedCar);
+                return jam == null ? "No jammed lap bar needs repair" : "Wrong car — repair flagged car " + (jam.TargetIndex + 1);
+            }
+            if (verb == OpVerb.OpenUnloadDoor) return Sim.UnloadingTrain() == null ? "Wait for a train at the unload berth" : "Unload door is already open";
+            if (verb == OpVerb.CloseUnloadDoor) return !Sim.UnloadDoorOpen ? "Unload door is already closed" : "Wait for guests and the doorway to clear";
+            if (verb == OpVerb.ReleaseRestraints) return Sim.UnloadingTrain() == null ? "Wait for a train at the unload berth"
+                : Sim.RestraintsReleased ? "Restraints already released" : "Wait until the unload door is fully open";
+            return "Action unavailable — check ride state and safety requirements";
+        }
 
         void Awake()
         {
@@ -107,7 +145,12 @@ namespace ParkShift.Attraction
             var track = Object.FindObjectOfType<Vehicles.TrackPath>();
             if (track != null) cfg.BlockCount = track.EffectiveBlockCount;
 
+            cfg.TimedFaultsEnabled = true;
             Sim = new AttractionSim(cfg);
+            // Physical interlocks also apply to the solo auto-operator and server commands.
+            Sim.UnloadDoorClearToClose = () => UnloadDoorDriver.Instance == null || UnloadDoorDriver.Instance.CanClose;
+            Sim.UnloadDoorReadyToRelease = () => UnloadDoorDriver.Instance == null || UnloadDoorDriver.Instance.IsFullyOpen;
+            Sim.UnloadDoorReadyToDepart = () => UnloadDoorDriver.Instance == null || UnloadDoorDriver.Instance.IsFullyClosed;
             AutoOp = new AutoOperator(Sim);
             Sim.Telemetry.OnEntry += e => Debug.Log("[TELEMETRY] " + e);
             if (Track == null) Track = track;
@@ -140,6 +183,7 @@ namespace ParkShift.Attraction
             var tv = wrapper.AddComponent<TrainVisual>();
             tv.TrainId = t.Id; tv.Path = Track; tv.SeatAnchors = seats;
 
+            ParkShift.Environment.CartoonScenePalette.Paint(wrapper);
             if (GuestVisuals != null) GuestVisuals.RegisterTrain(tv);
         }
 
@@ -163,15 +207,23 @@ namespace ParkShift.Attraction
 
         void Update()
         {
-            if (!IsAuthoritative || Sim == null) return;
+            if (Sim == null) return;
+            if (Input.GetKeyDown(KeyCode.H)) Submit(OpVerb.CallAssistant);
+            if (!IsAuthoritative) return;
 
             // Solo: while the player wears the Technician hat, an auto-operator covers
             // the booth (keeps dispatching) and major incidents start rolling for the tech.
             bool techCover = Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo
                           && Player.RoleController.Local != null
                           && Player.RoleController.Local.Role == PlayerRole.Technician;
-            AutoOp.Enabled = techCover;
+            AutoOp.Enabled = techCover || (Networking.NetworkBootstrap.Mode == Networking.NetMode.Solo
+                && Player.RoleController.Local != null && Player.RoleController.Local.Role == PlayerRole.Manager);
             Sim.Faults.TechScenarioMode = techCover;
+#if FISHNET
+            if (Networking.NetworkBootstrap.Mode != Networking.NetMode.Solo)
+                Sim.Faults.TechScenarioMode = Networking.AttractionNetSync.Instance != null
+                    && Networking.AttractionNetSync.Instance.HasTechnician;
+#endif
             AutoOp.Tick(Time.deltaTime);
 
             Sim.Tick(Time.deltaTime);
@@ -182,14 +234,25 @@ namespace ParkShift.Attraction
                 if (_assistantTimer <= 0f) AssistantResolve();
             }
 
-            if (Input.GetKeyDown(KeyCode.H)) Submit(OpVerb.CallAssistant);
+
         }
 
         /// <summary>All player verbs funnel through here so multiplayer can intercept.</summary>
         public bool Submit(OpVerb verb)
         {
-            if (!IsAuthoritative && VerbRouter != null) return VerbRouter(verb);
-            return Execute(verb);
+            if (verb == OpVerb.ToggleAdmissions || verb == OpVerb.GuestCare)
+            {
+                if (Player.RoleController.Local == null || Player.RoleController.Local.Role != PlayerRole.Manager)
+                { ReportCommandStatus("Manager role required"); return false; }
+            }
+            if (!IsAuthoritative)
+            {
+                ReportCommandStatus(VerbRouter != null ? "Waiting for host..." : "Not connected to host");
+                return VerbRouter != null && VerbRouter(verb);
+            }
+            bool accepted = Execute(verb);
+            ReportCommandStatus(accepted ? "Command processed" : CommandRejectionReason(verb));
+            return accepted;
         }
 
         public bool Execute(OpVerb verb)
@@ -220,13 +283,16 @@ namespace ParkShift.Attraction
                 case OpVerb.UnjamCar2: return Sim.UnjamRestraint(2);
                 case OpVerb.UnjamCar3: return Sim.UnjamRestraint(3);
                 case OpVerb.AddRv: return AddRv();
+                case OpVerb.ToggleAdmissions: return Sim.Management.ToggleAdmissions();
+                case OpVerb.GuestCare: return Sim.Management.OfferGuestCare();
                 case OpVerb.CallAssistant:
                     if (_assistantTimer <= 0f && Sim.Faults.Active.Count > 0)
                     {
                         _assistantTimer = Sim.Config.AssistantFixSeconds;
                         Sim.Telemetry.Log(Sim.SimTime, "ASSIST", "Remote tech called (score penalty)");
+                        return true;
                     }
-                    return true;
+                    return false;
             }
             return false;
         }
@@ -254,3 +320,8 @@ namespace ParkShift.Attraction
         }
     }
 }
+
+
+
+
+

@@ -18,6 +18,7 @@ namespace ParkShift.Core
         /// <summary>Fired when a new RV is added at runtime so the visual layer can spawn its body.</summary>
         public event Action<TrainSim> OnTrainAdded;
         public readonly GuestSim Guests;
+        public readonly ManagementSim Management;
         public readonly FaultSystem Faults;
         public readonly ScoreSystem Score = new ScoreSystem();
         public readonly Telemetry Telemetry = new Telemetry();
@@ -39,6 +40,9 @@ namespace ParkShift.Core
         public bool UnloadAreaClear { get; private set; } = true;
         /// <summary>True while guests are standing up / walking out after a restraints release.</summary>
         public bool GuestsUnloading { get; private set; }
+        public Func<bool> UnloadDoorClearToClose;
+        public Func<bool> UnloadDoorReadyToRelease;
+        public Func<bool> UnloadDoorReadyToDepart;
         /// <summary>Fired when the operator releases restraints — the visual layer plays the
         /// stand-up + walk-to-exit flow for that RV's riders.</summary>
         public event Action<TrainSim> OnUnloadReleased;
@@ -54,6 +58,7 @@ namespace ParkShift.Core
             Config = cfg;
             Blocks = new BlockSystem(cfg.BlockCount);
             Guests = new GuestSim(cfg);
+            Management = new ManagementSim(this);
             Faults = new FaultSystem(cfg, seed);
             // Spawn & register every RV with the block system. Train 0 sits in the station;
             // the rest stage downstream from the brake run backward (block N-1, N-2, ...),
@@ -79,6 +84,12 @@ namespace ParkShift.Core
                 Score.BreakStreak();   // a fault interrupts smooth operation — the dispatch combo resets
                 Telemetry.Log(SimTime, "FAULT", $"TRIGGERED {f.Def.Type}: {f.Def.HmiMessage}");
                 SetState(AttractionState.Faulted);
+            };
+            Faults.OnDeadlineMissed += f =>
+            {
+                Score.AddPenalty(20);
+                Guests.Penalize(6f);
+                Telemetry.Log(SimTime, "DEADLINE", $"Response window missed: {f.Def.Type}; -20 score, -6 mood. Repair still available.");
             };
             Faults.OnFaultResolved += f =>
             {
@@ -110,6 +121,7 @@ namespace ParkShift.Core
         {
             if (Faults.HasFault(FaultType.GateSensorFault) && open) return; // sensor fault holds gates
             Guests.SetGates(open);
+            if (open) PlatformTrain()?.InvalidateRestraints();
             Telemetry.Log(SimTime, "OPS", open ? "Gates opened" : "Gates closed");
         }
 
@@ -133,8 +145,8 @@ namespace ParkShift.Core
         public bool VerifyRestraints()
         {
             var t = PlatformTrain();
-            if (t == null || t.Riders == 0) return false;
-            if (Faults.HasFault(FaultType.RestraintNotVerified)) return false; // must inspect seat first
+            if (t == null || t.Riders == 0 || t.RestraintsVerified || Guests.GatesOpen) return false;
+            if (Faults.HasFault(FaultType.RestraintNotVerified) || Faults.HasFault(FaultType.RestraintJammedCar)) return false;
             t.VerifyRestraints();
             Telemetry.Log(SimTime, "OPS", $"Restraints verified (train {t.Id})");
             return true;
@@ -169,7 +181,7 @@ namespace ParkShift.Core
         /// <summary>Close the Unload door. Allowed only once guests have cleared the area.</summary>
         public bool CloseUnloadDoor()
         {
-            if (!UnloadDoorOpen || !UnloadAreaClear) return false;
+            if (!UnloadDoorOpen || !UnloadAreaClear || (UnloadDoorClearToClose != null && !UnloadDoorClearToClose())) return false;
             UnloadDoorOpen = false;
             RestraintsReleased = false;
             Telemetry.Log(SimTime, "OPS", "Unload door closed");
@@ -181,7 +193,8 @@ namespace ParkShift.Core
         public bool ReleaseRestraints()
         {
             var rv = UnloadingTrain();
-            if (rv == null || !UnloadDoorOpen || RestraintsReleased) return false;
+            if (rv == null || !UnloadDoorOpen || RestraintsReleased
+                || (UnloadDoorReadyToRelease != null && !UnloadDoorReadyToRelease())) return false;
             RestraintsReleased = true;
             GuestsUnloading = true;
             UnloadAreaClear = false;
@@ -190,6 +203,7 @@ namespace ParkShift.Core
             if (riders > 0)
             {
                 Score.AddRiders(riders);
+                Management.EarnRevenue(riders);
                 Guests.RewardRiders(riders);
                 Telemetry.Log(SimTime, "OPS", $"Restraints released — {riders} guests unloading");
             }
@@ -395,13 +409,27 @@ namespace ParkShift.Core
 
             bool rideDown = Faults.Active.Count > 0 || LotoEngaged;
             if (rideDown) Score.AddDowntime(dt);
+            // The advertised travel/repair window must be usable without emergency drain
+            // alone exhausting mood. Queue waiting still applies at the normal rate.
+            bool protectedResponse = false;
+            foreach (var fault in Faults.Active)
+            {
+                if (!fault.Def.BlocksDispatch && !fault.Def.StopsRide) continue;
+                if (fault.DeadlineAt <= SimTime) { protectedResponse = false; break; }
+                protectedResponse = true;
+            }
+            float emergencyDrainScale = Config.TimedFaultsEnabled && protectedResponse ? 0.15f : 1f;
 
-            Guests.Tick(dt, rideDown, SimTime);
-            Faults.Tick(dt, SimTime);
+            Management.Tick(dt);
+            Guests.Tick(dt, rideDown, SimTime, Management.AdmissionsPaused, emergencyDrainScale);
+            Faults.Tick(dt, SimTime, PlatformTrain() != null && PlatformTrain().Riders > 0);
 
             foreach (var t in Trains)
             {
-                bool completed = t.Tick(dt, Config, RidePowered);
+                bool unloadHeld = Config.SeparateLoadUnload && t.State == TrainState.InStationUnloading
+                    && (!UnloadAreaClear || UnloadDoorOpen
+                        || (UnloadDoorReadyToDepart != null && !UnloadDoorReadyToDepart()));
+                bool completed = t.Tick(dt, Config, RidePowered && !unloadHeld);
                 if (completed)
                 {
                     if (Config.SeparateLoadUnload)
@@ -433,6 +461,7 @@ namespace ParkShift.Core
                         if (riders > 0)
                         {
                             Score.AddRiders(riders);
+                            Management.EarnRevenue(riders);
                             Guests.RewardRiders(riders);
                             Telemetry.Log(SimTime, "OPS", $"Train {t.Id} returned, {riders} riders served");
                         }
@@ -469,7 +498,7 @@ namespace ParkShift.Core
             // Stalled-queue mood drain: a platform train loitering past the grace window sours the crowd.
             if (p != null && p.StationIdleSeconds > Config.StallGraceSeconds
                 && Config.SatisfactionStallDrainPerSecond > 0f)
-                Guests.Penalize(Config.SatisfactionStallDrainPerSecond * dt);
+                Guests.Penalize(Config.SatisfactionStallDrainPerSecond * dt * emergencyDrainScale);
             if (p != null && p.StationIdleSeconds > Config.DispatchTimeoutSeconds && !_timeoutFaultLatched)
             { Faults.Trigger(FaultType.DispatchTimeout, SimTime); _timeoutFaultLatched = true; }
             if (_timeoutFaultLatched && (p == null || p.StationIdleSeconds < 1f))
@@ -538,3 +567,5 @@ namespace ParkShift.Core
         }
     }
 }
+
+

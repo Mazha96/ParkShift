@@ -12,6 +12,7 @@ namespace ParkShift
     {
         void Start()
         {
+            if (Networking.NetworkBootstrap.Mode != Networking.NetMode.Solo) return;
             var spawn = GameObject.Find("PlayerSpawn");
             Vector3 pos = spawn ? spawn.transform.position : new Vector3(0, 1.1f, -6);
 
@@ -23,6 +24,7 @@ namespace ParkShift
             cc.slopeLimit = 50f;    // ramps walk cleanly
 
             var camGO = new GameObject("PlayerCamera");
+            camGO.tag = "MainCamera";
             camGO.transform.SetParent(rig.transform, false);
             camGO.transform.localPosition = new Vector3(0, 1.6f, 0);
             var cam = camGO.AddComponent<Camera>();
@@ -41,17 +43,20 @@ namespace ParkShift
 
         /// <summary>Bloom + ACES tonemapping + vignette for the "console HD" look.
         /// Compiles to a no-op until the Post Processing package resolves (POSTFX define).</summary>
-        static void SetupPostFx(GameObject camGO)
+        public static void SetupPostFx(GameObject camGO)
         {
 #if POSTFX
-            var layer = camGO.AddComponent<UnityEngine.Rendering.PostProcessing.PostProcessLayer>();
             // runtime-added layers need the package's resources asset bound manually
+            if (camGO == null || camGO.GetComponent<UnityEngine.Rendering.PostProcessing.PostProcessLayer>() != null) return;
             var allRes = Resources.FindObjectsOfTypeAll<UnityEngine.Rendering.PostProcessing.PostProcessResources>();
-            if (allRes.Length > 0) layer.Init(allRes[0]);
+            if (allRes.Length == 0 || allRes[0] == null) return;
+            var layer = camGO.AddComponent<UnityEngine.Rendering.PostProcessing.PostProcessLayer>();
+            layer.Init(allRes[0]);
             layer.volumeLayer = ~0; // blend volumes on all layers
             layer.antialiasingMode = UnityEngine.Rendering.PostProcessing.PostProcessLayer.Antialiasing.FastApproximateAntialiasing;
 
             var volGO = new GameObject("GlobalPostFx");
+            volGO.transform.SetParent(camGO.transform, false);
             var vol = volGO.AddComponent<UnityEngine.Rendering.PostProcessing.PostProcessVolume>();
             vol.isGlobal = true;
 
@@ -77,7 +82,22 @@ namespace ParkShift
             ao.intensity.Override(0.55f);
 
             vol.profile = profile;
+            volGO.AddComponent<RuntimePostFxProfile>().Profile = profile;
 #endif
         }
     }
+
+#if POSTFX
+    /// <summary>The package requires callers to dispose profiles supplied at runtime.</summary>
+    sealed class RuntimePostFxProfile : MonoBehaviour
+    {
+        public UnityEngine.Rendering.PostProcessing.PostProcessProfile Profile;
+        void OnDestroy()
+        {
+            if (Profile != null)
+                UnityEngine.Rendering.PostProcessing.RuntimeUtilities.DestroyProfile(Profile, true);
+        }
+    }
+#endif
 }
+
