@@ -13,3 +13,6 @@
 *.user
 .DS_Store
 files.zip
+# Test/playtest run outputs (keep the verify_*.py scripts)
+_previews/*
+!_previews/*.py

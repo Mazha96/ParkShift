@@ -1,0 +1,30 @@
+# Normalize text to LF in the repo and working tree (Unity writes LF YAML).
+* text=auto eol=lf
+
+# Unity YAML assets
+*.unity    text eol=lf
+*.prefab   text eol=lf
+*.asset    text eol=lf
+*.mat      text eol=lf
+*.meta     text eol=lf
+*.controller text eol=lf
+*.anim     text eol=lf
+
+# Binary
+*.fbx  binary
+*.blend binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.tga  binary
+*.psd  binary
+*.exr  binary
+*.hdr  binary
+*.wav  binary
+*.mp3  binary
+*.ogg  binary
+*.ttf  binary
+*.otf  binary
+*.zip  binary
+*.dll  binary
+*.exe  binary

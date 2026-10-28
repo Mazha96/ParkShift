@@ -1,7 +1,0 @@
-[1] coast stop_at=0.92 target=0.92 max=0.92 spd=0.0 -> PASS
-[2] no co-occupancy: 3RV=True 4RV=True -> PASS
-[3] steady 540s (60s warmup skipped):
-    3RV done=42 held=0.0s | Station:0s Lift:0s CrsA:0s CrsB:0s CrsC:0s Brake:0s
-    4RV done=47 held=319.9s | Station:0s Lift:0s CrsA:0s CrsB:60s CrsC:260s Brake:0s
-    3RV clean(held<15s)=True  4RV stacking(>5x,back-half)=True -> PASS
-ALL PASS
