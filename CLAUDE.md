@@ -31,7 +31,7 @@
 
 Run all three before every commit:
 
-1. **Core + bot playtest** (no Unity, needs the .NET 9 SDK): `powershell -File Tools/CoreTestHarness/run.ps1`. It must print `ALL N TESTS PASSED`.
+1. **Core + bot playtest** (no Unity, needs the .NET 9 SDK): `powershell -File Tools/CoreTestHarness/run.ps1 [-Seeds N]`. It must print `ALL N TESTS PASSED` and `BOT SWEEP PASSED` twice (normal and 6x-fault stress sweeps of the shipped config). A failing seed prints its last telemetry lines.
 2. **Unity EditMode** (headless; the editor must be closed):
    `"C:/Program Files/Unity/Hub/Editor/6000.0.32f1/Editor/Unity.exe" -batchmode -nographics -projectPath "<repo>" -runTests -testPlatform EditMode -testResults <out.xml> -logFile <out.log>`
    NUnit wrappers in `Assets/Tests/EditMode/CoreSystemTests.cs` call `CoreTestSuite` tests. Add a wrapper line for every new Core test.
