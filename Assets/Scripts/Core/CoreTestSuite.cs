@@ -223,6 +223,69 @@ namespace ParkShift.Core.Testing
             var sim = NewSim(c => c.DispatchTimeoutSeconds = 5f);
             RunUntil(sim, () => sim.Faults.HasFault(FaultType.DispatchTimeout), 20f);
             Check(sim.Faults.HasFault(FaultType.DispatchTimeout), "timeout fault triggers from loitering");
+
+            // Dispatching is the fix: the alert must clear and the ride must leave Faulted.
+            RunUntil(sim, () => sim.Guests.QueueCount > 0, 30f);
+            sim.SetGates(true); sim.LoadPlatformTrain(); sim.SetGates(false); sim.VerifyRestraints();
+            Check(sim.Dispatch(), "dispatch accepted during timeout alert");
+            sim.Tick(0.1f);
+            Check(!sim.Faults.HasFault(FaultType.DispatchTimeout), "dispatch clears the timeout alert");
+            // The second train may still be stacked behind; that alert clears once it rolls in.
+            RunUntil(sim, () => sim.Faults.Active.Count == 0, 20f);
+            Check(sim.State == AttractionState.Ready, "ride leaves Faulted once alerts clear");
+        }
+
+        public static void Test_LockoutTagout()
+        {
+            _current = nameof(Test_LockoutTagout);
+            // Lockout applied BEFORE the fault appears still makes it safe to repair.
+            var sim = NewSim();
+            sim.EngageLoto(true);
+            sim.Faults.Trigger(FaultType.MaintenanceResetRequired, sim.SimTime);
+            Check(sim.MaintenanceReset(), "fault raised under lockout is repairable");
+            sim.Faults.Trigger(FaultType.TrainValleyed, sim.SimTime);
+            Check(sim.WinchValleyedTrain(), "valleyed train raised under lockout is winchable");
+            sim.EngageLoto(false);
+            Check(sim.State == AttractionState.Ready, "release with nothing active returns to Ready");
+
+            // Releasing the lockout restores power and blocks repairs again.
+            sim.Faults.Trigger(FaultType.MaintenanceResetRequired, sim.SimTime);
+            sim.EngageLoto(true);
+            sim.EngageLoto(false);
+            Check(!sim.MaintenanceReset(), "repair refused after lockout released");
+            Check(sim.Faults.HasFault(FaultType.MaintenanceResetRequired), "fault still active after refused repair");
+            sim.EngageLoto(true);
+            Check(sim.MaintenanceReset(), "re-applying lockout allows the repair");
+            sim.EngageLoto(false);
+            Check(sim.State == AttractionState.Ready, "ride recovers after lockout cycle");
+        }
+
+        public static void Test_RemoteTechChargesOnlyOnSuccess()
+        {
+            _current = nameof(Test_RemoteTechChargesOnlyOnSuccess);
+            var sim = NewSim();
+            int before = sim.Score.PenaltyPoints;
+            Check(!sim.HasRemoteTechWork, "nothing to fix with no faults");
+            Check(!sim.RemoteTechFix(30), "no fix with no faults");
+            Check(sim.Score.PenaltyPoints == before, "no charge with no faults");
+
+            // Condition alerts clear themselves; the remote tech has nothing to do.
+            sim.Faults.Trigger(FaultType.DispatchTimeout, sim.SimTime);
+            before = sim.Score.PenaltyPoints; // triggering charges the catalog penalty
+            Check(!sim.HasRemoteTechWork, "condition alert is not remote-tech work");
+            Check(!sim.RemoteTechFix(30), "condition alert not 'fixed' by remote tech");
+            Check(sim.Score.PenaltyPoints == before, "no charge for condition alert");
+            sim.Faults.ForceResolve(FaultType.DispatchTimeout);
+
+            // Collision needs inspect + lockout; the remote tech does the whole job and charges once.
+            sim.Faults.Trigger(FaultType.TrainCollision, sim.SimTime);
+            before = sim.Score.PenaltyPoints;
+            Check(sim.HasRemoteTechWork, "collision is remote-tech work");
+            Check(sim.RemoteTechFix(30), "remote tech clears a collision");
+            Check(!sim.Faults.HasFault(FaultType.TrainCollision), "collision gone");
+            Check(sim.Score.PenaltyPoints == before + 30, "charged exactly once on success");
+            Check(!sim.RemoteTechFix(30), "second call finds nothing");
+            Check(sim.Score.PenaltyPoints == before + 30, "no charge on the empty second call");
         }
 
         public static void Test_ScoreCalculation()
@@ -370,7 +433,7 @@ namespace ParkShift.Core.Testing
                 while (fs.Active.Count > 0)
                 {
                     var a = fs.Active[0];
-                    fs.MarkLoto(a.Def.Type); fs.MarkInspected(a.Def.Type);
+                    fs.LockoutApplied = true; fs.MarkInspected(a.Def.Type);
                     fs.Resolve(a.Def.Type);
                 }
             }
@@ -388,7 +451,7 @@ namespace ParkShift.Core.Testing
                 while (fs.Active.Count > 0)
                 {
                     var a = fs.Active[0];
-                    fs.MarkLoto(a.Def.Type); fs.MarkInspected(a.Def.Type);
+                    fs.LockoutApplied = true; fs.MarkInspected(a.Def.Type);
                     fs.Resolve(a.Def.Type);
                 }
             }
@@ -572,7 +635,7 @@ namespace ParkShift.Core.Testing
             faults.Tick(1f, 217f);
             Check(first.DeadlineMissed && missed == 1, "deadline consequence fires once");
             Check(faults.Active.Count == 1, "overdue fault never creates a pileup");
-            faults.MarkInspected(first.Def.Type); faults.MarkLoto(first.Def.Type);
+            faults.MarkInspected(first.Def.Type); faults.LockoutApplied = true;
             Check(faults.Resolve(first.Def.Type), "overdue repair remains possible");
             faults.Tick(1f, 218f);
             Check(faults.Active.Count == 0, "recovery breathing room");
@@ -598,7 +661,7 @@ namespace ParkShift.Core.Testing
                 if (remoteSeats.Active.Count > 0)
                 {
                     var type = remoteSeats.Active[0].Def.Type;
-                    remoteSeats.MarkLoto(type); remoteSeats.MarkInspected(type); remoteSeats.Resolve(type);
+                    remoteSeats.LockoutApplied = true; remoteSeats.MarkInspected(type); remoteSeats.Resolve(type);
                 }
             }
             var sim = NewSim(c => c.TimedFaultsEnabled = true);
@@ -640,7 +703,8 @@ namespace ParkShift.Core.Testing
                 Test_FullShiftEndsAndTelemetry,
                 Test_BlockSensorGhostFault, Test_PowerBrownoutStagedRestart, Test_RestraintJamTargetsCar,
                 Test_EscalationRampAndSurge, Test_ComboScoringAndSatisfaction, Test_ManagerShiftResources, Test_QueueCapacityNoArrivalDebt,
-                Test_LateJoinSnapshot, Test_AutoOperatorSplitStation, Test_TimedFaultFairness, Test_ResponseWindowMoodFairness
+                Test_LateJoinSnapshot, Test_AutoOperatorSplitStation, Test_TimedFaultFairness, Test_ResponseWindowMoodFairness,
+                Test_LockoutTagout, Test_RemoteTechChargesOnlyOnSuccess
             };
             foreach (var t in tests) { t(); print($"  ran {t.Method.Name}"); }
             if (Failures.Count == 0) { print($"ALL {tests.Length} TESTS PASSED"); return 0; }

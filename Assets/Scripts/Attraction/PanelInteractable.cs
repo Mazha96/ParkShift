@@ -64,7 +64,7 @@ namespace ParkShift.Attraction
                     if (collision != null && !collision.Inspected) return "Inspect the collision contact point first";
                     return S.LotoEngaged ? "Reset drive controller" : "Reset refused — LOTO required";
                 case Kind.AssistantPhone:
-                    return S.Faults.Active.Count > 0 && M.AssistantRemaining <= 0f
+                    return S.HasRemoteTechWork && M.AssistantRemaining <= 0f
                         ? "Call remote tech (auto-fix, score penalty)" : null;
                 case Kind.IntruderEscort:
                     if (!S.Faults.HasFault(FaultType.TrackIntrusion)) return null;

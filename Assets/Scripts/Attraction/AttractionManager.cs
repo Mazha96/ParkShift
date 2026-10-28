@@ -286,10 +286,10 @@ namespace ParkShift.Attraction
                 case OpVerb.ToggleAdmissions: return Sim.Management.ToggleAdmissions();
                 case OpVerb.GuestCare: return Sim.Management.OfferGuestCare();
                 case OpVerb.CallAssistant:
-                    if (_assistantTimer <= 0f && Sim.Faults.Active.Count > 0)
+                    if (_assistantTimer <= 0f && Sim.HasRemoteTechWork)
                     {
                         _assistantTimer = Sim.Config.AssistantFixSeconds;
-                        Sim.Telemetry.Log(Sim.SimTime, "ASSIST", "Remote tech called (score penalty)");
+                        Sim.Telemetry.Log(Sim.SimTime, "ASSIST", "Remote tech called (score penalty on success)");
                         return true;
                     }
                     return false;
@@ -299,12 +299,8 @@ namespace ParkShift.Attraction
 
         void AssistantResolve()
         {
-            if (Sim.Faults.Active.Count == 0) return;
-            var f = Sim.Faults.Active[0];
-            if (f.Def.RequiresLoto) Sim.Faults.MarkLoto(f.Def.Type);
-            Sim.Faults.Resolve(f.Def.Type);
-            Sim.Score.AddPenalty((int)AssistantPenalty);
-            Sim.Telemetry.Log(Sim.SimTime, "ASSIST", $"Remote tech cleared {f.Def.Type}");
+            // Penalty only lands if the tech actually clears something on arrival.
+            Sim.RemoteTechFix((int)AssistantPenalty);
         }
 
         void OnDestroy()

@@ -112,7 +112,7 @@ namespace ParkShift.Networking
             {
                 if (manager.Sim.State == AttractionState.Closed) manager.Submit(OpVerb.OpenShift);
                 // Solo intentionally exercises AttractionManager's normal role-based operator.
-                if (manager.Sim.State != AttractionState.EndOfShift && manager.Sim.Faults.Active.Count > 0 && manager.AssistantRemaining <= 0f)
+                if (manager.Sim.State != AttractionState.EndOfShift && manager.Sim.HasRemoteTechWork && manager.AssistantRemaining <= 0f)
                     manager.Submit(OpVerb.CallAssistant);
             }
             if (NetworkBootstrap.Mode == NetMode.Host && manager != null && manager.IsAuthoritative && manager.Sim != null && peers >= 2)
@@ -120,7 +120,7 @@ namespace ParkShift.Networking
                 if (manager.Sim.State == AttractionState.Closed) manager.Submit(OpVerb.OpenShift);
                 if (_operator == null) _operator = new AutoOperator(manager.Sim) { Enabled = true };
                 _operator.Tick(Time.deltaTime);
-                if (manager.Sim.Faults.Active.Count > 0 && manager.AssistantRemaining <= 0f)
+                if (manager.Sim.HasRemoteTechWork && manager.AssistantRemaining <= 0f)
                     manager.Submit(OpVerb.CallAssistant);
             }
             if (elapsed >= (_screenshot == 0 ? 10f : 30f) && _screenshot < 2)

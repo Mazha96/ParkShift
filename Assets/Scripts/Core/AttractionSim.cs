@@ -245,7 +245,8 @@ namespace ParkShift.Core
                 Telemetry.Log(SimTime, "SCORE", $"Dispatch streak x{streak} (+{bonus} combo)");
             }
             Guests.RewardDispatch(Config.SatisfactionPerSmoothDispatch);
-            _timeoutFaultLatched = false;
+            // Dispatching is the fix for a throughput alert.
+            if (_timeoutFaultLatched) { Faults.Resolve(FaultType.DispatchTimeout); _timeoutFaultLatched = false; }
             Telemetry.Log(SimTime, "OPS", $"DISPATCH train {t.Id} with {t.Riders} riders");
             return true;
         }
@@ -253,14 +254,36 @@ namespace ParkShift.Core
         public void EngageLoto(bool engaged)
         {
             LotoEngaged = engaged;
+            Faults.LockoutApplied = engaged;
             Telemetry.Log(SimTime, "MAINT", engaged ? "LOTO ENGAGED — energy isolated, tag hung" : "LOTO RELEASED");
             if (engaged)
             {
-                foreach (var f in Faults.Active) if (f.Def.RequiresLoto) Faults.MarkLoto(f.Def.Type);
                 if (State == AttractionState.Ready) SetState(AttractionState.LotoActive);
             }
             else if (State == AttractionState.LotoActive && Faults.Active.Count == 0)
                 SetState(AttractionState.Ready);
+        }
+
+        /// <summary>The oldest active fault the remote tech can repair, or null
+        /// (condition alerts clear themselves from live ride state).</summary>
+        ActiveFault RemoteTechTarget()
+        {
+            foreach (var f in Faults.Active)
+                if (!FaultSystem.IsConditionFault(f.Def.Type)) return f;
+            return null;
+        }
+
+        public bool HasRemoteTechWork => RemoteTechTarget() != null;
+
+        /// <summary>Remote tech performs the full repair of the oldest repairable fault.
+        /// The penalty is charged only when a fault is actually cleared.</summary>
+        public bool RemoteTechFix(int penalty)
+        {
+            var f = RemoteTechTarget();
+            if (f == null || !Faults.ForceResolve(f.Def.Type)) return false;
+            Score.AddPenalty(penalty);
+            Telemetry.Log(SimTime, "ASSIST", $"Remote tech cleared {f.Def.Type}");
+            return true;
         }
 
         public bool MaintenanceReset()

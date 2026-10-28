@@ -37,6 +37,8 @@ namespace ParkShift.Tests
         [Test] public void RestraintJamTargetsCar() => Run(CoreTestSuite.Test_RestraintJamTargetsCar);
         [Test] public void EscalationRampAndSurge() => Run(CoreTestSuite.Test_EscalationRampAndSurge);
         [Test] public void ComboScoringAndSatisfaction() => Run(CoreTestSuite.Test_ComboScoringAndSatisfaction);
+        [Test] public void LockoutTagout() => Run(CoreTestSuite.Test_LockoutTagout);
+        [Test] public void RemoteTechChargesOnlyOnSuccess() => Run(CoreTestSuite.Test_RemoteTechChargesOnlyOnSuccess);
     }
 }
 

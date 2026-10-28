@@ -277,7 +277,6 @@ namespace ParkShift.Networking
             v |= (f.Stage & 0xFF) << 8;
             v |= ((f.TargetIndex + 1) & 0xFF) << 16; // +1 so -1 (n/a) encodes as 0
             if (f.Inspected) v |= 1 << 24;
-            if (f.LotoSatisfied) v |= 1 << 25;
             if (f.DeadlineMissed) v |= 1 << 26;
             return v;
         }
@@ -378,9 +377,7 @@ namespace ParkShift.Networking
             {
                 for (int i = 0; i < stale.Count; i++)
                 {
-                    var f = s.Faults.Find(stale[i]);
-                    if (f != null) { f.LotoSatisfied = true; f.Inspected = true; }
-                    s.Faults.Resolve(stale[i]);
+                    s.Faults.ForceResolve(stale[i]);
                 }
             }
 
@@ -398,7 +395,6 @@ namespace ParkShift.Networking
                 f.Stage = (packed >> 8) & 0xFF;
                 f.TargetIndex = ((packed >> 16) & 0xFF) - 1;
                 f.Inspected = (packed & (1 << 24)) != 0;
-                f.LotoSatisfied = (packed & (1 << 25)) != 0;
                 f.DeadlineAt = FaultDeadline(i).Value;
                 f.DeadlineMissed = (packed & (1 << 26)) != 0;
                 string text = FaultText(i).Value;
@@ -558,7 +554,7 @@ namespace ParkShift.Networking
             stage = (packed >> 8) & 0xFF;
             targetIndex = ((packed >> 16) & 0xFF) - 1;
             inspected = (packed & (1 << 24)) != 0;
-            lotoSatisfied = (packed & (1 << 25)) != 0;
+            lotoSatisfied = _lotoEngaged.Value; // lockout is ride-level
             hmiText = FaultText(slot).Value;
             return true;
         }

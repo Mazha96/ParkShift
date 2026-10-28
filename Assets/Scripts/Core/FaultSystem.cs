@@ -22,7 +22,6 @@ namespace ParkShift.Core
     {
         public FaultDefinition Def;
         public float TriggeredAt;
-        public bool LotoSatisfied;
         public bool Inspected;
         /// <summary>Fault-specific target (e.g. the jammed car index). -1 when not applicable.</summary>
         public int TargetIndex = -1;
@@ -151,6 +150,15 @@ namespace ParkShift.Core
         /// <summary>When true, major incident faults roll in addition to the base pool.</summary>
         public bool TechScenarioMode;
 
+        /// <summary>Ride-level lockout/tagout. While applied, every LOTO repair is permitted,
+        /// including faults raised after the lock went on. Releasing it blocks them again.</summary>
+        public bool LockoutApplied;
+
+        /// <summary>Condition alerts are raised and cleared by AttractionSim from live ride state;
+        /// there is no repair action for them.</summary>
+        public static bool IsConditionFault(FaultType t) =>
+            t == FaultType.BlockOccupiedStacking || t == FaultType.DispatchTimeout;
+
         public FaultSystem(SimConfig cfg, int seed = 0)
         {
             _cfg = cfg;
@@ -253,19 +261,22 @@ namespace ParkShift.Core
             return af;
         }
 
-        public void MarkLoto(FaultType type)
-        {
-            var f = _active.Find(a => a.Def.Type == type);
-            if (f != null) f.LotoSatisfied = true;
-        }
-
-        /// <summary>Attempt to resolve. Fails if LOTO is required but not engaged.</summary>
+        /// <summary>Attempt to resolve. Fails if LOTO is required but not applied, or an
+        /// inspection step is still outstanding.</summary>
         public bool Resolve(FaultType type)
         {
             var f = _active.Find(a => a.Def.Type == type);
             if (f == null) return false;
-            if (f.Def.RequiresLoto && !f.LotoSatisfied) return false;
+            if (f.Def.RequiresLoto && !LockoutApplied) return false;
             if (f.Def.RequiresInspection && !f.Inspected) return false;
+            return ForceResolve(type);
+        }
+
+        /// <summary>Remove a fault regardless of repair preconditions (remote tech, client mirror).</summary>
+        public bool ForceResolve(FaultType type)
+        {
+            var f = _active.Find(a => a.Def.Type == type);
+            if (f == null) return false;
             _active.Remove(f);
             if (_cfg.TimedFaultsEnabled && f.Def.BlocksDispatch)
                 _nextIncidentAt = _simTime + Math.Max(0f, _cfg.IncidentRecoverySeconds);
