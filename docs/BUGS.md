@@ -18,3 +18,4 @@ Numbering matches the audit in `OVERHAUL_PLAN.md` §0.3. Each entry says which p
 | 15 | JuiceDirector misses a same-frame resolve+trigger | `JuiceDirector.cs:105` | Phase 1 |
 | 16 | NetSync merges same-type faults; more than 4 faults dropped silently | `AttractionNetSync.cs:238,371` | Phase 3 |
 | 17 | Docs drift (BrakePoint01, N+1 comment, "two-train") | docs, `SimConfig.cs:9` | Opportunistic |
+| 18 | Scene rebuild is not byte-stable: every Build All Scenes rewrites ~106k lines of fileID churn in the scenes and the Dewey controller, with no content change. Revert the churn instead of committing it. | `SceneBuilder.cs` | Phase 4 (prefab-aware SceneBuilder) |

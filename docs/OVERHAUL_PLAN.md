@@ -1,6 +1,6 @@
 # Park Chaos Overhaul: Audit and Plan
 
-Status: **Phase 0b in progress.** Audit approved 2026-10-27.
+Status: **Phase 0b complete (2026-10-28). Awaiting review before Phase 1.** Audit approved 2026-10-27.
 
 ## Decisions (owner, 2026-10-27)
 
